@@ -238,7 +238,19 @@ class Settings:
     def get_default_model(cls, provider: str) -> str:
         """指定プロバイダーのデフォルトモデルを取得"""
         models = list(cls.LLM_PROVIDERS[provider]["models"].keys())
-        return st.session_state.get(f"selected_model_{provider}", models[0])
+        session_key = f"selected_model_{provider}"
+
+        # セッション状態から取得
+        saved_model = st.session_state.get(session_key)
+
+        # 保存されたモデルが現在のモデル一覧に存在するかチェック
+        if saved_model and saved_model in models:
+            return saved_model
+        else:
+            # 存在しない場合は最初のモデルを返し、セッション状態を更新
+            default_model = models[0]
+            st.session_state[session_key] = default_model
+            return default_model
 
     @classmethod
     def get_default_rag_config(cls) -> str:

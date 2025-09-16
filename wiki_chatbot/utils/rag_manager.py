@@ -10,6 +10,7 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_openai import OpenAIEmbeddings
 from docx import Document
 import streamlit as st
+from config.settings import get_current_rag_config
 
 
 class RAGManager:
@@ -219,15 +220,45 @@ class RAGManager:
             search_results = []
             if results["documents"] and results["documents"][0]:
                 for i in range(len(results["documents"][0])):
+                    distance = results["distances"][0][i] if results["distances"] else 0.0
+                    # コサイン距離を類似度スコアに変換 (0=完全一致、1=全く異なる → 1=完全一致、0=全く異なる)
+                    similarity_score = 1.0 - distance
+
                     search_results.append(
                         {
                             "content": results["documents"][0][i],
                             "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
-                            "distance": results["distances"][0][i] if results["distances"] else 0.0,
+                            "distance": distance,
+                            "similarity_score": similarity_score,
                         }
                     )
 
-            return search_results
+            # デバッグ情報を出力（開発時のみ）
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write(f"🔍 検索クエリ: '{query}'")
+                for i, result in enumerate(search_results[:3]):
+                    st.write(f"結果{i+1}: 距離={result['distance']:.4f}, 類似度={result['similarity_score']:.4f}")
+                    st.write(f"内容: {result['content'][:100]}...")
+
+            # ChromaDBは既に距離順（小さい順）で返すが、念のため明示的にソート
+            search_results.sort(key=lambda x: x["distance"])
+
+            # 関連度の低い結果をフィルタリング（閾値より高い距離をカット）
+            similarity_threshold = 0.7  # 設定から取得するか、デフォルト値
+            try:
+                # 現在のRAG設定から閾値を取得
+                _, rag_config = get_current_rag_config()
+                similarity_threshold = getattr(rag_config, 'similarity_threshold', 0.7)
+            except:
+                pass
+
+            # 距離が閾値を超えるものを除外（距離が大きい = 類似度が低い）
+            filtered_results = [r for r in search_results if r["distance"] <= (1.0 - similarity_threshold)]
+
+            if st.secrets.get("DEBUG_MODE", False) and len(filtered_results) < len(search_results):
+                st.write(f"⚠️ 関連度の低い結果を {len(search_results) - len(filtered_results)} 件除外しました")
+
+            return filtered_results if filtered_results else search_results[:1]  # 最低1件は返す
 
         except Exception as e:
             st.error(f"Error searching: {e}")

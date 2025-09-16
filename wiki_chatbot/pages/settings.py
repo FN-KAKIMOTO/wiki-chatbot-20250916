@@ -202,15 +202,32 @@ def show_llm_settings():
         )
 
     # 設定変更ボタン
-    if st.button("設定を適用", type="primary"):
-        try:
-            llm_manager.set_current_provider(selected_provider, selected_model)
-            st.success(
-                f"✅ {available_providers[selected_provider]} - {available_models[selected_model]} に変更しました"
-            )
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        if st.button("設定を適用", type="primary"):
+            try:
+                llm_manager.set_current_provider(selected_provider, selected_model)
+                st.success(
+                    f"✅ {available_providers[selected_provider]} - {available_models[selected_model]} に変更しました"
+                )
+                st.rerun()
+            except Exception as e:
+                st.error(f"設定変更エラー: {str(e)}")
+
+    with col2:
+        if st.button("🔄 設定リセット", help="古いモデル名などの問題を解決します"):
+            # 古いセッション状態をクリア
+            keys_to_clear = []
+            for key in st.session_state.keys():
+                if key.startswith(('selected_model_', 'selected_provider')):
+                    keys_to_clear.append(key)
+
+            for key in keys_to_clear:
+                del st.session_state[key]
+
+            st.success("✅ 設定をリセットしました。ページを再読み込みしてください。")
             st.rerun()
-        except Exception as e:
-            st.error(f"設定変更エラー: {str(e)}")
 
     # モデル詳細情報
     if selected_provider and selected_model:

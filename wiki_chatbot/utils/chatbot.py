@@ -32,6 +32,18 @@ class WikiChatbot:
             context_text = ""
             sources = []
 
+            # デバッグ情報表示（検索結果の関連度確認）
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write("🔍 **RAG検索結果の関連度確認**")
+                for i, item in enumerate(context):
+                    similarity = item.get('similarity_score', 'N/A')
+                    distance = item.get('distance', 'N/A')
+                    st.write(f"結果{i+1}: 類似度={similarity:.4f}, 距離={distance:.4f}")
+                    st.write(f"内容: {item['content'][:100]}...")
+                    if i >= 2:  # 上位3件まで表示
+                        break
+                st.divider()
+
             for i, item in enumerate(context, 1):
                 context_text += f"[情報源 {i}]\n{item['content']}\n\n"
                 if "metadata" in item and "file_name" in item["metadata"]:
