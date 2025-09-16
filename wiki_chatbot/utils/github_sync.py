@@ -1,0 +1,281 @@
+"""
+GitHub + Git LFS による永続データ同期管理
+
+このモジュールは、Streamlit CloudでのRAGデータとチャット履歴の永続化を
+GitHub + Git LFSを使用して実現します。
+
+主な機能:
+- GitHubからのデータダウンロード（復元）
+- GitHubへのデータアップロード（バックアップ）
+- 起動時の自動同期
+- 定期的な自動バックアップ
+
+使用例:
+    sync = GitHubDataSync(
+        repo_url="https://github.com/username/wiki-chatbot-data.git",
+        token="ghp_xxxxxxxxxxxx"
+    )
+
+    # 起動時同期
+    sync.sync_on_startup()
+
+    # データバックアップ
+    sync.upload_data("Manual backup")
+"""
+
+import os
+import json
+import shutil
+import subprocess
+import tempfile
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Dict, Any
+import streamlit as st
+
+
+class GitHubDataSync:
+    """GitHub + Git LFS による永続データ同期管理クラス"""
+
+    def __init__(self,
+                 repo_url: str,
+                 token: str,
+                 local_data_dir: str = "data",
+                 branch: str = "main"):
+        """
+        初期化
+
+        Args:
+            repo_url: GitHubリポジトリのURL
+            token: GitHub Personal Access Token
+            local_data_dir: ローカルデータディレクトリ
+            branch: 使用するブランチ名
+        """
+        self.repo_url = repo_url
+        self.token = token
+        self.local_data_dir = Path(local_data_dir)
+        self.branch = branch
+        self.temp_dir = None
+        self.logger = self._setup_logger()
+
+    def _setup_logger(self) -> logging.Logger:
+        """ログ設定"""
+        logger = logging.getLogger("github_sync")
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+        return logger
+
+    def _run_git_command(self, command: list, cwd: str) -> bool:
+        """
+        Git コマンド実行
+
+        Args:
+            command: 実行するGitコマンドのリスト
+            cwd: 実行ディレクトリ
+
+        Returns:
+            成功時True、失敗時False
+        """
+        try:
+            # GitHub トークンを含む認証URL作成
+            if self.token and "clone" in command and len(command) > 2:
+                auth_url = self.repo_url.replace(
+                    "https://", f"https://{self.token}@"
+                )
+                command[2] = auth_url
+
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+
+            if result.returncode != 0:
+                self.logger.error(f"Git command failed: {result.stderr}")
+                return False
+
+            self.logger.info(f"Git command success: {' '.join(command[:2])}")
+            return True
+
+        except subprocess.TimeoutExpired:
+            self.logger.error("Git command timed out")
+            return False
+        except Exception as e:
+            self.logger.error(f"Git command error: {e}")
+            return False
+
+    def download_data(self) -> bool:
+        """
+        GitHubからデータをダウンロード
+
+        Returns:
+            成功時True、失敗時False
+        """
+        try:
+            self.logger.info("Starting data download from GitHub...")
+
+            # 一時ディレクトリ作成
+            self.temp_dir = tempfile.mkdtemp()
+
+            # リポジトリクローン
+            clone_success = self._run_git_command([
+                "git", "clone", self.repo_url, self.temp_dir
+            ], ".")
+
+            if not clone_success:
+                return False
+
+            # Git LFS ファイル取得
+            lfs_success = self._run_git_command([
+                "git", "lfs", "pull"
+            ], self.temp_dir)
+
+            if not lfs_success:
+                self.logger.warning("LFS pull failed, continuing...")
+
+            # データディレクトリ確保
+            self.local_data_dir.mkdir(exist_ok=True)
+
+            # データファイルコピー
+            source_data = Path(self.temp_dir) / "data"
+            if source_data.exists():
+                shutil.copytree(
+                    source_data,
+                    self.local_data_dir,
+                    dirs_exist_ok=True
+                )
+                self.logger.info("Data download completed")
+                return True
+            else:
+                self.logger.info("No existing data found, starting fresh")
+                return True
+
+        except Exception as e:
+            self.logger.error(f"Data download failed: {e}")
+            return False
+        finally:
+            # 一時ディレクトリクリーンアップ
+            if self.temp_dir and Path(self.temp_dir).exists():
+                shutil.rmtree(self.temp_dir)
+
+    def upload_data(self, commit_message: str = None) -> bool:
+        """
+        データをGitHubにアップロード
+
+        Args:
+            commit_message: コミットメッセージ
+
+        Returns:
+            成功時True、失敗時False
+        """
+        try:
+            if not commit_message:
+                commit_message = f"Auto backup - {datetime.now().isoformat()}"
+
+            self.logger.info("Starting data upload to GitHub...")
+
+            # 一時ディレクトリ作成
+            self.temp_dir = tempfile.mkdtemp()
+
+            # リポジトリクローン
+            clone_success = self._run_git_command([
+                "git", "clone", self.repo_url, self.temp_dir
+            ], ".")
+
+            if not clone_success:
+                return False
+
+            # データディレクトリコピー
+            dest_data = Path(self.temp_dir) / "data"
+            if dest_data.exists():
+                shutil.rmtree(dest_data)
+
+            if self.local_data_dir.exists():
+                shutil.copytree(self.local_data_dir, dest_data)
+
+            # Git 設定
+            config_commands = [
+                ["git", "config", "user.email", "streamlit-bot@example.com"],
+                ["git", "config", "user.name", "Streamlit Bot"]
+            ]
+
+            for cmd in config_commands:
+                self._run_git_command(cmd, self.temp_dir)
+
+            # ファイル追加・コミット
+            git_commands = [
+                ["git", "add", "."],
+                ["git", "commit", "-m", commit_message],
+                ["git", "push", "origin", self.branch]
+            ]
+
+            for cmd in git_commands:
+                success = self._run_git_command(cmd, self.temp_dir)
+                if not success and "commit" in cmd:
+                    self.logger.info("No changes to commit")
+                    return True
+                elif not success:
+                    return False
+
+            self.logger.info("Data upload completed")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Data upload failed: {e}")
+            return False
+        finally:
+            # 一時ディレクトリクリーンアップ
+            if self.temp_dir and Path(self.temp_dir).exists():
+                shutil.rmtree(self.temp_dir)
+
+    def sync_on_startup(self) -> bool:
+        """
+        アプリ起動時の同期
+
+        既存データがない場合のみGitHubからダウンロードする
+
+        Returns:
+            成功時True、失敗時False
+        """
+        self.logger.info("Performing startup data sync...")
+
+        # 既存データ確認
+        chroma_db = self.local_data_dir / "chroma_db" / "chroma.sqlite3"
+        sqlite_db = self.local_data_dir / "chatbot.db"
+
+        if not chroma_db.exists() or not sqlite_db.exists():
+            self.logger.info("Local data missing, downloading from GitHub...")
+            return self.download_data()
+
+        self.logger.info("Local data exists, skipping download")
+        return True
+
+    def get_sync_status(self) -> Dict[str, Any]:
+        """
+        同期状況の取得
+
+        Returns:
+            同期状況の辞書
+        """
+        chroma_db = self.local_data_dir / "chroma_db" / "chroma.sqlite3"
+        sqlite_db = self.local_data_dir / "chatbot.db"
+
+        return {
+            "chroma_db_exists": chroma_db.exists(),
+            "sqlite_db_exists": sqlite_db.exists(),
+            "chroma_db_size": chroma_db.stat().st_size if chroma_db.exists() else 0,
+            "sqlite_db_size": sqlite_db.stat().st_size if sqlite_db.exists() else 0,
+            "last_modified": {
+                "chroma_db": datetime.fromtimestamp(chroma_db.stat().st_mtime).isoformat() if chroma_db.exists() else None,
+                "sqlite_db": datetime.fromtimestamp(sqlite_db.stat().st_mtime).isoformat() if sqlite_db.exists() else None
+            }
+        }

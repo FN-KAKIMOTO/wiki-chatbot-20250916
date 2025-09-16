@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  wiki-chatbot:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      # LLM Provider API Keys (set in .env file)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      
+      # App Configuration
+      - APP_TITLE=${APP_TITLE:-Wiki Chatbot}
+      - COMPANY_NAME=${COMPANY_NAME:-Your Company}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      
+      # Security Settings
+      - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - SECRET_KEY=${SECRET_KEY}
+      - SESSION_TIMEOUT=${SESSION_TIMEOUT:-3600}
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-10485760}
+      
+      # Storage Configuration
+      - USE_S3=${USE_S3:-false}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - AWS_ACCESS_KEY=${AWS_ACCESS_KEY}
+      - AWS_SECRET_KEY=${AWS_SECRET_KEY}
+      - DATA_DIR=/app/data
+      
+      # Performance Settings
+      - MAX_QUERIES_PER_SESSION=${MAX_QUERIES_PER_SESSION:-100}
+      - ENABLE_ANALYTICS=${ENABLE_ANALYTICS:-false}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    
+    volumes:
+      # Persist data directory
+      - ./data:/app/data
+      # Mount custom prompts if available
+      - ./config/prompts:/app/config/prompts
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

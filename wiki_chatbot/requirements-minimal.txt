@@ -1,0 +1,11 @@
+# Minimal requirements for basic functionality (OpenAI only)
+streamlit>=1.28.0
+openai>=1.3.0
+langchain>=0.0.335
+langchain-openai>=0.0.2
+langchain-community>=0.0.12
+chromadb>=0.4.15
+pypdf>=3.17.0
+python-docx>=0.8.11
+pandas>=2.1.3
+beautifulsoup4>=4.12.2
