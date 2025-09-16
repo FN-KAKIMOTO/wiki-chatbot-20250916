@@ -123,7 +123,11 @@ def show_llm_settings():
                     if status["available"]:
                         st.success("利用可能")
                     elif status["api_key_configured"]:
-                        st.warning("未インストール")  # API Keyは設定済みだがライブラリ未インストール
+                        # パッケージインストール状況も表示
+                        if status.get("package_installed", False):
+                            st.warning("設定エラー")  # パッケージはあるがプロバイダー初期化失敗
+                        else:
+                            st.warning("未インストール")  # パッケージ未インストール
                     else:
                         st.error("未設定")  # API Key未設定
 

@@ -85,16 +85,27 @@ class LLMManager:
         self._initialize_providers()     # プロバイダーの検出と初期化
         self._load_current_settings()    # デフォルト設定の読み込み
 
+        # デバッグ情報をログ出力
+        print(f"[LLMManager] 利用可能なプロバイダー: {list(self.providers.keys())}")
+        print(f"[LLMManager] 現在のプロバイダー: {self.current_provider}")
+        print(f"[LLMManager] 現在のモデル: {self.current_model}")
+
     def _initialize_providers(self):
         """利用可能なプロバイダーを初期化"""
         # OpenAI
         try:
             import openai
+            api_key = settings.get_api_key("openai")
+            print(f"[LLMManager] OpenAI API Key 確認: {'有り' if api_key else '無し'}")
 
-            if settings.get_api_key("openai"):
+            if api_key:
                 self.providers["openai"] = self._create_openai_client()
-        except ImportError:
+                print(f"[LLMManager] OpenAI プロバイダー初期化成功")
+        except ImportError as e:
+            print(f"[LLMManager] OpenAI インポートエラー: {e}")
             st.warning("OpenAI パッケージがインストールされていません")
+        except Exception as e:
+            print(f"[LLMManager] OpenAI 初期化エラー: {e}")
 
         # Anthropic (Claude)
         try:
@@ -137,8 +148,11 @@ class LLMManager:
 
     def _load_current_settings(self):
         """現在の設定を読み込み（優先順位に従って自動選択）"""
+        print(f"[LLMManager] 設定読み込み開始")
+
         # 設定から優先順位に従ってプロバイダーを取得
         default_provider = settings.get_default_provider()
+        print(f"[LLMManager] デフォルトプロバイダー: {default_provider}")
 
         # デフォルトプロバイダーが利用可能かチェック
         if default_provider in self.providers:
@@ -146,6 +160,7 @@ class LLMManager:
             self.current_provider = default_provider
             self.current_model = default_model
             self.current_config = settings.get_model_config(default_provider, default_model)
+            print(f"[LLMManager] デフォルトプロバイダー設定完了: {default_provider}/{default_model}")
         else:
             # フォールバック: 利用可能な最初のプロバイダーを使用
             if self.providers:
@@ -154,9 +169,18 @@ class LLMManager:
                 self.current_provider = first_provider
                 self.current_model = first_model
                 self.current_config = settings.get_model_config(first_provider, first_model)
+                print(f"[LLMManager] フォールバックプロバイダー設定: {first_provider}/{first_model}")
             else:
                 # プロバイダーが利用できない場合の処理
-                self.current_provider, self.current_model, self.current_config = get_current_llm_config()
+                print(f"[LLMManager] 警告: 利用可能なプロバイダーがありません")
+                try:
+                    self.current_provider, self.current_model, self.current_config = get_current_llm_config()
+                    print(f"[LLMManager] 緊急フォールバック設定: {self.current_provider}/{self.current_model}")
+                except Exception as e:
+                    print(f"[LLMManager] 緊急フォールバック失敗: {e}")
+                    self.current_provider = None
+                    self.current_model = None
+                    self.current_config = None
 
     def get_available_providers(self) -> Dict[str, str]:
         """利用可能なプロバイダー一覧を取得（優先順位順）"""
@@ -187,16 +211,32 @@ class LLMManager:
 
     def generate_response(self, messages: List[Dict[str, str]], **kwargs) -> Tuple[str, Dict[str, Any]]:
         """統合レスポンス生成"""
+        print(f"[LLMManager] generate_response 呼び出し")
+        print(f"[LLMManager] current_provider: {self.current_provider}")
+        print(f"[LLMManager] 利用可能なプロバイダー: {list(self.providers.keys())}")
+
+        if not self.current_provider:
+            raise ValueError("プロバイダーが選択されていません。設定画面でLLMプロバイダーを選択してください。")
+
         if self.current_provider not in self.providers:
-            raise ValueError("プロバイダーが設定されていません")
+            available_providers = list(self.providers.keys())
+            if available_providers:
+                error_msg = f"プロバイダー '{self.current_provider}' が利用できません。利用可能: {available_providers}"
+            else:
+                error_msg = "利用可能なプロバイダーがありません。API Keyが正しく設定されているか確認してください。"
+            raise ValueError(error_msg)
 
         # プロバイダー別の処理を実行
-        if self.current_provider == "openai":
-            return self._generate_openai_response(messages, **kwargs)
-        elif self.current_provider == "anthropic":
-            return self._generate_anthropic_response(messages, **kwargs)
-        elif self.current_provider == "google":
-            return self._generate_google_response(messages, **kwargs)
+        try:
+            if self.current_provider == "openai":
+                return self._generate_openai_response(messages, **kwargs)
+            elif self.current_provider == "anthropic":
+                return self._generate_anthropic_response(messages, **kwargs)
+            elif self.current_provider == "google":
+                return self._generate_google_response(messages, **kwargs)
+        except Exception as e:
+            print(f"[LLMManager] {self.current_provider} レスポンス生成エラー: {e}")
+            raise
         else:
             raise ValueError(f"未対応のプロバイダー: {self.current_provider}")
 
@@ -335,16 +375,37 @@ class LLMManager:
             api_key = settings.get_api_key(provider_id)
             is_available = provider_id in self.providers
 
+            # パッケージのインストール状況も個別確認
+            package_installed = self._check_package_installed(provider_id)
+            print(f"[LLMManager] {provider_id} - API Key: {'有り' if api_key else '無し'}, パッケージ: {'インストール済み' if package_installed else '未インストール'}, 利用可能: {is_available}")
+
             status[provider_id] = {
                 "name": provider_info["name"],
                 "api_key_configured": bool(api_key),
                 "api_key_partial": api_key[-4:] if api_key else None,
                 "available": is_available,
+                "package_installed": package_installed,
                 "models_count": len(provider_info["models"]),
                 "current": provider_id == self.current_provider,
             }
 
         return status
+
+    def _check_package_installed(self, provider_id: str) -> bool:
+        """指定プロバイダーのパッケージがインストールされているかチェック"""
+        try:
+            if provider_id == "openai":
+                import openai
+                return True
+            elif provider_id == "anthropic":
+                import anthropic
+                return True
+            elif provider_id == "google":
+                import google.generativeai as genai
+                return True
+        except ImportError:
+            return False
+        return False
 
     def estimate_cost(self, text_length: int, response_length: int = None) -> float:
         """コスト見積もり"""

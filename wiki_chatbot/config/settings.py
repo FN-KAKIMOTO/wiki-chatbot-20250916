@@ -137,19 +137,19 @@ class Settings:
             "name": "Google (Gemini)",
             "api_key_env": "GOOGLE_API_KEY",
             "models": {
-                "gemini-pro": LLMModelConfig(
-                    name="Gemini Pro",
-                    max_tokens=2048,
+                "gemini-1.5-flash": LLMModelConfig(
+                    name="Gemini 1.5 Flash",
+                    max_tokens=8192,
                     temperature=0.3,
                     top_p=0.95,
                     frequency_penalty=0.0,
                     presence_penalty=0.0,
-                    cost_per_1k_tokens_input=0.00025,
-                    cost_per_1k_tokens_output=0.0005,
-                    context_window=30720,
+                    cost_per_1k_tokens_input=0.000075,
+                    cost_per_1k_tokens_output=0.0003,
+                    context_window=1000000,
                 ),
-                "gemini-pro-1.5": LLMModelConfig(
-                    name="Gemini Pro 1.5",
+                "gemini-1.5-pro": LLMModelConfig(
+                    name="Gemini 1.5 Pro",
                     max_tokens=8192,
                     temperature=0.2,
                     top_p=0.95,
@@ -157,7 +157,7 @@ class Settings:
                     presence_penalty=0.0,
                     cost_per_1k_tokens_input=0.00125,
                     cost_per_1k_tokens_output=0.00375,
-                    context_window=1000000,
+                    context_window=2000000,
                 ),
             },
         },
