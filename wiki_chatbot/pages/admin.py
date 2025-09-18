@@ -278,35 +278,29 @@ def show_data_export():
     st.subheader("🗂️ データエクスポート")
 
     # 統合エクスポートの説明
-    with st.expander("💡 統合データエクスポートについて"):
+    with st.expander("💡 エクスポート機能について"):
         st.write("""
-        **統合データエクスポート**では、チャット履歴とユーザーフィードバックを結合したCSVファイルを出力できます。
+        **チャット履歴のみ**:
+        - ユーザーメッセージ、Bot回答、参考資料、セッション情報
+        - チャット内容の詳細分析に適している
 
-        **含まれる情報：**
-        - チャット履歴（ユーザーメッセージ、Bot回答、参考資料等）
-        - ユーザーフィードバック（満足度、セッション時間）
+        **統合データ（履歴+フィードバック）**:
+        - チャット履歴 + ユーザーフィードバック（満足度、不満足理由等）
         - セッションIDで関連付けられた統合データ
+        - 満足度分析や改善点の特定に適している
 
-        **利用例：**
-        - 満足度の高い回答パターンの分析
-        - プロンプトスタイル別の効果測定
-        - ユーザー体験改善のためのデータ分析
+        **フィードバックデータのみ**:
+        - ユーザー満足度、セッション時間、不満足理由
+        - 満足度推移の分析に適している
         """)
 
-    # エクスポート設定
-    col1, col2, col3 = st.columns(3)
+    # エクスポート対象の選択
+    export_products = st.multiselect("エクスポート対象商材", ["全商材"] + existing_products, default=["全商材"])
 
-    with col1:
-        export_products = st.multiselect("エクスポート対象商材", ["全商材"] + existing_products, default=["全商材"])
+    st.write("**エクスポートしたいデータを選択してください：**")
 
-    with col2:
-        export_type = st.selectbox("エクスポート種類", ["チャット履歴のみ", "統合データ（履歴+フィードバック）"])
-
-    with col3:
-        export_format = st.selectbox("エクスポート形式", ["CSV"])  # 将来的にJSONも対応可能
-
-    # エクスポートボタンを2つに分ける
-    col_btn1, col_btn2 = st.columns(2)
+    # エクスポートボタンを3つに分ける
+    col_btn1, col_btn2, col_btn3 = st.columns(3)
 
     with col_btn1:
         if st.button("📄 チャット履歴のみ", use_container_width=True):
@@ -315,6 +309,10 @@ def show_data_export():
     with col_btn2:
         if st.button("📊 統合データ（履歴+フィードバック）", use_container_width=True):
             _export_data(export_products, existing_products, "combined")
+
+    with col_btn3:
+        if st.button("📋 フィードバックデータのみ", use_container_width=True):
+            _export_feedback_only()
 
 def _export_data(export_products, existing_products, export_type):
     """エクスポート実行の共通処理"""
@@ -359,24 +357,24 @@ def _export_data(export_products, existing_products, export_type):
     else:
         st.warning("エクスポートするデータがありません")
 
-    st.divider()
+def _export_feedback_only():
+    """フィードバックデータのみをエクスポート"""
+    if os.path.exists(feedback_manager.feedback_file):
+        with open(feedback_manager.feedback_file, "rb") as f:
+            st.download_button(
+                label="📁 user_feedback.csv をダウンロード",
+                data=f.read(),
+                file_name="user_feedback.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        st.success("✅ フィードバックデータの準備完了")
 
-    st.subheader("📊 フィードバックデータエクスポート")
-
-    if st.button("📥 フィードバックデータをエクスポート", use_container_width=True):
-        # フィードバックファイルの存在確認
-        if os.path.exists(feedback_manager.feedback_file):
-            with open(feedback_manager.feedback_file, "rb") as f:
-                st.download_button(
-                    label="📁 user_feedback.csv をダウンロード",
-                    data=f.read(),
-                    file_name="user_feedback.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-            st.success("✅ フィードバックデータの準備完了")
-        else:
-            st.warning("まだフィードバックデータがありません")
+        # ファイル情報表示
+        file_size = os.path.getsize(feedback_manager.feedback_file)
+        st.info(f"📊 ファイルサイズ: {file_size:,} bytes")
+    else:
+        st.warning("まだフィードバックデータがありません")
 
 
 if __name__ == "__main__":

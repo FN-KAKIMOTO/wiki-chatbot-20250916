@@ -5,6 +5,7 @@ import pandas as pd
 import io
 from typing import List, Dict, Any
 from .rag_manager import RAGManager
+from .feedback_manager import feedback_manager
 
 
 class FileHandler:
@@ -42,6 +43,13 @@ class FileHandler:
                 "通常の導入期間は1-2週間程度です。データ移行やカスタマイズが必要な場合は追加で1-2週間かかる場合があります。",
                 "24時間365日のサポート体制を整えており、メール、電話、チャットでのサポートを提供しています。専任の技術者が対応いたします。",
                 "当社の製品は高度なAI機能と使いやすいUIが特徴で、導入コストも他社と比較して30%削減可能です。",
+            ],
+            "参考文献": [
+                "https://example.com/pricing",
+                "https://example.com/features",
+                "https://example.com/implementation-guide",
+                "https://example.com/support",
+                "https://example.com/comparison",
             ],
         }
 
@@ -136,6 +144,8 @@ class FileHandler:
 
                                 if success:
                                     st.success(f"✅ {uploaded_file.name} が追加されました")
+                                    # ファイル追加時に強制バックアップ
+                                    feedback_manager._force_backup(f"File added: {uploaded_file.name}")
                                 else:
                                     st.error(f"❌ {uploaded_file.name} の追加に失敗しました")
                 else:

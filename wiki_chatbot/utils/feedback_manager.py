@@ -23,6 +23,14 @@ try:
 except ImportError:
     PERSISTENT_DB_AVAILABLE = False
 
+# GitHub同期のインポート
+try:
+    from config.github_settings import GitHubConfig
+    from utils.github_sync import GitHubDataSync
+    GITHUB_SYNC_AVAILABLE = True
+except ImportError:
+    GITHUB_SYNC_AVAILABLE = False
+
 
 @dataclass
 class ChatMessage:
@@ -36,6 +44,7 @@ class ChatMessage:
         sources_used: 使用された参考文書のリスト。
         prompt_style: 生成に使用されたプロンプトのタイプ。
         session_id: チャットセッションの一意識別子。
+        user_name: ユーザー名（任意）。
     """
 
     timestamp: str
@@ -45,6 +54,7 @@ class ChatMessage:
     sources_used: List[str]
     prompt_style: str
     session_id: str
+    user_name: str = ""
 
 
 @dataclass
@@ -123,6 +133,23 @@ class FeedbackManager:
         # CSVファイルの初期化（ヘッダー行の作成）
         self._initialize_csv_files()
 
+        # GitHub同期の初期化
+        self.github_sync = None
+        if GITHUB_SYNC_AVAILABLE and GitHubConfig.is_configured():
+            try:
+                config = GitHubConfig.get_config()
+                self.github_sync = GitHubDataSync(
+                    repo_url=config["repo_url"],
+                    token=config["token"]
+                )
+            except Exception as e:
+                st.warning(f"GitHub同期初期化エラー: {e}")
+
+        # 自動バックアップの設定
+        self.auto_backup_enabled = st.secrets.get("AUTO_BACKUP_ENABLED", True)
+        self.backup_interval = st.secrets.get("BACKUP_INTERVAL_MESSAGES", 5)  # メッセージ5件ごと
+        self.message_count_since_backup = 0
+
     def _initialize_csv_files(self):
         """CSVファイルのヘッダーを初期化"""
 
@@ -136,6 +163,7 @@ class FeedbackManager:
                 "sources_used",
                 "prompt_style",
                 "session_id",
+                "user_name",
                 "message_length",
                 "response_length",
                 "sources_count",
@@ -172,8 +200,43 @@ class FeedbackManager:
 
         return st.session_state[session_key]
 
+    def _trigger_auto_backup(self, action: str = "Auto backup"):
+        """自動バックアップをトリガーする"""
+        if not self.auto_backup_enabled or not self.github_sync:
+            return
+
+        self.message_count_since_backup += 1
+
+        # 指定した間隔でバックアップを実行
+        if self.message_count_since_backup >= self.backup_interval:
+            try:
+                success = self.github_sync.upload_data(f"{action} - {datetime.now().isoformat()}")
+                if success:
+                    self.message_count_since_backup = 0
+                    if st.secrets.get("DEBUG_MODE", False):
+                        st.success(f"✅ 自動バックアップ完了 ({action})")
+                else:
+                    if st.secrets.get("DEBUG_MODE", False):
+                        st.warning(f"⚠️ 自動バックアップ失敗 ({action})")
+            except Exception as e:
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.error(f"❌ 自動バックアップエラー: {e}")
+
+    def _force_backup(self, action: str = "Force backup"):
+        """強制バックアップを実行する（ファイルアップロード時など）"""
+        if not self.github_sync:
+            return
+
+        try:
+            success = self.github_sync.upload_data(f"{action} - {datetime.now().isoformat()}")
+            if success and st.secrets.get("DEBUG_MODE", False):
+                st.success(f"✅ 強制バックアップ完了 ({action})")
+        except Exception as e:
+            if st.secrets.get("DEBUG_MODE", False):
+                st.error(f"❌ 強制バックアップエラー: {e}")
+
     def save_chat_message(
-        self, product_name: str, user_message: str, bot_response: str, sources_used: List[str], prompt_style: str
+        self, product_name: str, user_message: str, bot_response: str, sources_used: List[str], prompt_style: str, user_name: str = ""
     ):
         """チャットメッセージを保存（永続化データベース + CSV）"""
 
@@ -211,11 +274,15 @@ class FeedbackManager:
                         sources_string,
                         prompt_style,
                         session_id,
+                        user_name,
                         len(user_message),
                         len(clean_response),
                         len(sources_used),
                     ]
                 )
+
+            # 自動バックアップをトリガー
+            self._trigger_auto_backup("Chat message saved")
 
             return True
 
@@ -261,6 +328,9 @@ class FeedbackManager:
                 writer.writerow(
                     [timestamp, product_name, session_id, satisfaction, messages_count, prompt_style, session_duration, feedback_reason]
                 )
+
+            # フィードバック保存時は即座にバックアップ（重要データのため）
+            self._force_backup("Feedback saved")
 
             return True
 
@@ -309,10 +379,18 @@ class FeedbackManager:
 
             chat_df = pd.read_csv(self.chat_log_file, encoding="utf-8")
 
+            # チャット履歴に不足している列を追加（後方互換性のため）
+            if 'user_name' not in chat_df.columns:
+                chat_df['user_name'] = ""
+
             # フィードバックデータを読み込み（存在する場合）
             feedback_df = None
             if os.path.exists(self.feedback_file):
                 feedback_df = pd.read_csv(self.feedback_file, encoding="utf-8")
+
+                # フィードバックデータに不足している列を追加（後方互換性のため）
+                if 'feedback_reason' not in feedback_df.columns:
+                    feedback_df['feedback_reason'] = ""
 
             # 製品フィルタリング
             if product_name:
@@ -326,23 +404,42 @@ class FeedbackManager:
 
             # フィードバックデータがある場合、session_idでマージ
             if feedback_df is not None and not feedback_df.empty:
-                # session_idでフィードバック情報を結合（feedback_reasonも含める）
-                feedback_columns = ['session_id', 'satisfaction', 'session_duration']
-                if 'feedback_reason' in feedback_df.columns:
-                    feedback_columns.append('feedback_reason')
+                # デバッグ情報（開発時のみ表示）
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.write(f"🔍 マージ前データ確認:")
+                    st.write(f"チャット履歴: {len(chat_df)}件")
+                    st.write(f"フィードバック: {len(feedback_df)}件")
+                    st.write(f"共通session_id: {set(chat_df['session_id']) & set(feedback_df['session_id'])}")
+
+                # session_idでフィードバック情報を結合
+                feedback_columns = ['session_id', 'satisfaction', 'session_duration', 'feedback_reason']
+                # 存在する列のみを使用
+                available_feedback_columns = [col for col in feedback_columns if col in feedback_df.columns]
 
                 combined_df = pd.merge(
                     chat_df,
-                    feedback_df[feedback_columns],
+                    feedback_df[available_feedback_columns],
                     on='session_id',
                     how='left'
                 )
+
+                # デバッグ情報（開発時のみ表示）
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.write(f"マージ後: {len(combined_df)}件")
+                    satisfaction_filled = combined_df['satisfaction'].notna().sum()
+                    st.write(f"満足度データ有り: {satisfaction_filled}件")
             else:
                 # フィードバックデータがない場合はチャット履歴のみ
                 combined_df = chat_df.copy()
                 combined_df['satisfaction'] = None
                 combined_df['session_duration'] = None
                 combined_df['feedback_reason'] = None
+
+            # 不足している列を補完（マージ後に欠けている可能性があるため）
+            expected_feedback_columns = ['satisfaction', 'session_duration', 'feedback_reason']
+            for col in expected_feedback_columns:
+                if col not in combined_df.columns:
+                    combined_df[col] = None
 
             # エクスポートファイル名生成
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -351,7 +448,7 @@ class FeedbackManager:
 
             # 列の順序を整理
             column_order = [
-                'timestamp', 'product_name', 'session_id', 'user_message', 'bot_response',
+                'timestamp', 'product_name', 'session_id', 'user_name', 'user_message', 'bot_response',
                 'sources_used', 'prompt_style', 'message_length', 'response_length', 'sources_count',
                 'satisfaction', 'session_duration', 'feedback_reason'
             ]
@@ -359,6 +456,15 @@ class FeedbackManager:
             # 存在する列のみ選択
             available_columns = [col for col in column_order if col in combined_df.columns]
             combined_df = combined_df[available_columns]
+
+            # 最終デバッグ情報（開発時のみ表示）
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write(f"📊 エクスポート最終データ:")
+                st.write(f"総件数: {len(combined_df)}")
+                st.write(f"列: {list(combined_df.columns)}")
+                if 'satisfaction' in combined_df.columns:
+                    satisfaction_counts = combined_df['satisfaction'].value_counts(dropna=False)
+                    st.write(f"満足度分布: {satisfaction_counts.to_dict()}")
 
             # CSVエクスポート
             combined_df.to_csv(export_path, index=False, encoding="utf-8-sig")
@@ -376,7 +482,19 @@ class FeedbackManager:
             if not os.path.exists(self.feedback_file):
                 return {}
 
+            # デバッグ情報（一時的に表示）
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write(f"🔍 フィードバック分析対象ファイル: {self.feedback_file}")
+
             df = pd.read_csv(self.feedback_file, encoding="utf-8")
+
+            # デバッグ情報（一時的に表示）
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write(f"読み込んだデータ形状: {df.shape}")
+                st.write(f"列名: {list(df.columns)}")
+                if len(df) > 0:
+                    st.write("先頭3行:")
+                    st.dataframe(df.head(3))
 
             # 製品フィルタリング
             if product_name:
@@ -389,19 +507,57 @@ class FeedbackManager:
             satisfied = len(df[df["satisfaction"] == "満足"])
             dissatisfied = len(df[df["satisfaction"] == "不満足"])
 
+            # 数値列の安全な処理（数値変換エラーのハンドリング）
+            try:
+                # session_durationの処理
+                numeric_duration = pd.to_numeric(df["session_duration"], errors='coerce')
+                avg_duration = numeric_duration.mean() if total_feedback > 0 else 0
+                if pd.isna(avg_duration):
+                    avg_duration = 0
+            except Exception:
+                avg_duration = 0
+
+            try:
+                # total_messagesの処理
+                numeric_messages = pd.to_numeric(df["total_messages"], errors='coerce')
+                avg_messages = numeric_messages.mean() if total_feedback > 0 else 0
+                if pd.isna(avg_messages):
+                    avg_messages = 0
+            except Exception:
+                avg_messages = 0
+
             summary = {
                 "total_sessions": total_feedback,
                 "satisfied_count": satisfied,
                 "dissatisfied_count": dissatisfied,
                 "satisfaction_rate": (satisfied / total_feedback * 100) if total_feedback > 0 else 0,
-                "avg_messages_per_session": df["total_messages"].mean() if total_feedback > 0 else 0,
-                "avg_session_duration": df["session_duration"].astype(float).mean() if total_feedback > 0 else 0,
+                "avg_messages_per_session": avg_messages,
+                "avg_session_duration": avg_duration,
             }
 
             return summary
 
         except Exception as e:
+            # より詳細なエラー情報を表示
             st.error(f"集計エラー: {str(e)}")
+
+            # デバッグ情報（エラー時のみ表示）
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write("🔍 **エラーデバッグ情報**:")
+                try:
+                    st.write(f"ファイルパス: {self.feedback_file}")
+                    if os.path.exists(self.feedback_file):
+                        debug_df = pd.read_csv(self.feedback_file, encoding="utf-8")
+                        st.write(f"データ行数: {len(debug_df)}")
+                        st.write(f"列名: {list(debug_df.columns)}")
+
+                        # 各列のデータ型確認
+                        for col in debug_df.columns:
+                            unique_values = debug_df[col].unique()[:5]  # 最初の5つのユニーク値
+                            st.write(f"列 '{col}': {unique_values}")
+                except Exception as debug_e:
+                    st.write(f"デバッグ情報取得エラー: {debug_e}")
+
             return {}
 
     def get_dissatisfaction_reasons(self, product_name: str = None) -> List[Dict[str, str]]:
@@ -416,6 +572,22 @@ class FeedbackManager:
             # 製品フィルタリング
             if product_name:
                 df = df[df["product_name"] == product_name]
+
+            # feedback_reason列が存在するかチェック
+            if "feedback_reason" not in df.columns:
+                # 古い形式のファイルの場合、不満足のデータのみ返す（理由なし）
+                dissatisfied_df = df[df["satisfaction"] == "不満足"]
+                reasons = []
+                for _, row in dissatisfied_df.iterrows():
+                    reasons.append({
+                        "timestamp": row["timestamp"],
+                        "product_name": row["product_name"],
+                        "session_id": row["session_id"],
+                        "feedback_reason": "（理由未記録）",
+                        "prompt_style": row.get("prompt_style", ""),
+                        "total_messages": row.get("total_messages", 0)
+                    })
+                return reasons
 
             # 不満足で理由が記入されているもののみ抽出
             dissatisfied_df = df[

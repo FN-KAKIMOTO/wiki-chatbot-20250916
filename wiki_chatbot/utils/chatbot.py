@@ -166,6 +166,22 @@ class WikiChatbot:
     def chat_interface(self, product_name: str):
         st.title(f"💬 {product_name} Wiki チャット")
 
+        # ユーザー名入力UI
+        user_name_key = f"user_name_{product_name}"
+        if user_name_key not in st.session_state:
+            st.session_state[user_name_key] = ""
+
+        with st.expander("🏷️ ユーザー情報（任意）", expanded=False):
+            user_name = st.text_input(
+                "お名前（分析用、任意）",
+                value=st.session_state[user_name_key],
+                placeholder="例: 田中太郎",
+                help="チャット履歴の分析用に使用されます。未入力でも利用可能です。",
+                key=f"user_name_input_{product_name}"
+            )
+            if user_name != st.session_state[user_name_key]:
+                st.session_state[user_name_key] = user_name
+
         # プロンプトスタイル選択UI
         self._show_prompt_style_selector(product_name)
 
@@ -346,12 +362,14 @@ class WikiChatbot:
             )
 
             # チャット履歴を保存
+            user_name = st.session_state.get(f"user_name_{product_name}", "")
             feedback_manager.save_chat_message(
                 product_name=product_name,
                 user_message=prompt,
                 bot_response=response,
                 sources_used=list(set(sources_list)),  # 重複除去
                 prompt_style=current_prompt_style,
+                user_name=user_name,
             )
 
         # 満足度調査を表示（会話がある程度進んだ場合）
@@ -389,37 +407,16 @@ class WikiChatbot:
     def clear_chat_history(self, product_name: str):
         messages_count = len(st.session_state.get(f"messages_{product_name}", []))
 
-        # エクスポート機能
+        # チャット履歴クリア機能
         if messages_count > 0:
-            col1, col2 = st.columns(2)
-
-            with col1:
-                if st.button(f"📥 {product_name} の履歴をエクスポート", key=f"export_{product_name}"):
-                    export_path = feedback_manager.export_chat_history(product_name)
-                    if export_path:
-                        st.success(f"✅ エクスポート完了: {os.path.basename(export_path)}")
-
-                        # ダウンロードボタンの提供
-                        with open(export_path, "rb") as f:
-                            st.download_button(
-                                label="📁 CSVファイルをダウンロード",
-                                data=f.read(),
-                                file_name=os.path.basename(export_path),
-                                mime="text/csv",
-                                key=f"download_{product_name}",
-                            )
-                    else:
-                        st.warning("エクスポートするデータがありません")
-
-            with col2:
-                if st.button(f"🗑️ {product_name} のチャット履歴をクリア", key=f"clear_{product_name}"):
-                    if f"messages_{product_name}" in st.session_state:
-                        del st.session_state[f"messages_{product_name}"]
-                        # セッション関連の状態もクリア
-                        if f"feedback_given_{product_name}" in st.session_state:
-                            del st.session_state[f"feedback_given_{product_name}"]
-                        st.success("✅ チャット履歴をクリアしました\n💡 次回からは新しい会話として開始されます")
-                        st.rerun()
+            if st.button(f"🗑️ {product_name} のチャット履歴をクリア", key=f"clear_{product_name}"):
+                if f"messages_{product_name}" in st.session_state:
+                    del st.session_state[f"messages_{product_name}"]
+                    # セッション関連の状態もクリア
+                    if f"feedback_given_{product_name}" in st.session_state:
+                        del st.session_state[f"feedback_given_{product_name}"]
+                    st.success("✅ チャット履歴をクリアしました\n💡 次回からは新しい会話として開始されます")
+                    st.rerun()
 
         # 会話継続機能の説明
         if messages_count > 0:

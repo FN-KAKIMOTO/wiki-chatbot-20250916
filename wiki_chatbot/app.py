@@ -22,6 +22,45 @@ from config.github_settings import GitHubConfig
 from utils.chatbot import WikiChatbot
 from utils.session_manager import SessionManager
 from utils.github_sync import GitHubDataSync
+import threading
+import time
+
+
+def _setup_periodic_backup(github_sync):
+    """定期バックアップの設定"""
+    if not github_sync:
+        return
+
+    # 定期バックアップが既に設定済みの場合はスキップ
+    if "periodic_backup_setup" in st.session_state:
+        return
+
+    # バックアップ間隔（分）
+    backup_interval_minutes = st.secrets.get("PERIODIC_BACKUP_INTERVAL_MINUTES", 30)
+
+    def periodic_backup():
+        """バックグラウンドで定期バックアップを実行"""
+        while True:
+            try:
+                time.sleep(backup_interval_minutes * 60)  # 分を秒に変換
+                success = github_sync.upload_data(f"Periodic backup - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+                if st.secrets.get("DEBUG_MODE", False):
+                    if success:
+                        st.success("✅ 定期バックアップ完了")
+                    else:
+                        st.warning("⚠️ 定期バックアップ失敗")
+            except Exception as e:
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.error(f"❌ 定期バックアップエラー: {e}")
+
+    # バックグラウンドスレッドで定期バックアップを開始
+    if st.secrets.get("PERIODIC_BACKUP_ENABLED", True):
+        backup_thread = threading.Thread(target=periodic_backup, daemon=True)
+        backup_thread.start()
+        st.session_state.periodic_backup_setup = True
+
+        if st.secrets.get("DEBUG_MODE", False):
+            st.sidebar.info(f"🕒 定期バックアップ有効 ({backup_interval_minutes}分間隔)")
 
 
 def main() -> None:
@@ -73,6 +112,9 @@ def main() -> None:
                     st.sidebar.success("✅ データ同期完了")
                 else:
                     st.sidebar.warning("⚠️ データ同期に失敗しました")
+
+        # 定期バックアップの設定（セッション開始時のみ）
+        _setup_periodic_backup(github_sync)
 
     # 認証チェック
     if not SessionManager.check_authentication():
