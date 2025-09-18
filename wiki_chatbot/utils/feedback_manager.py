@@ -58,6 +58,7 @@ class UserFeedback:
         satisfaction: ユーザー満足度（「満足」または「不満足」）。
         total_messages: セッション内のメッセージ総数。
         prompt_style: セッション中に使用されたプロンプトのタイプ。
+        feedback_reason: 不満足の理由（自由回答、満足の場合は空文字）。
     """
 
     timestamp: str
@@ -66,6 +67,7 @@ class UserFeedback:
     satisfaction: str  # "満足" or "不満足"
     total_messages: int
     prompt_style: str
+    feedback_reason: str = ""  # 不満足の理由
 
 
 class FeedbackManager:
@@ -152,6 +154,7 @@ class FeedbackManager:
                 "total_messages",
                 "prompt_style",
                 "session_duration",
+                "feedback_reason",
             ]
             with open(self.feedback_file, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
@@ -220,7 +223,7 @@ class FeedbackManager:
             st.error(f"チャット履歴保存エラー: {str(e)}")
             return False
 
-    def save_feedback(self, product_name: str, satisfaction: str, prompt_style: str):
+    def save_feedback(self, product_name: str, satisfaction: str, prompt_style: str, feedback_reason: str = ""):
         """ユーザーフィードバックを保存（永続化データベース + CSV）"""
 
         try:
@@ -246,7 +249,8 @@ class FeedbackManager:
                         satisfaction=satisfaction,
                         total_messages=messages_count,
                         prompt_style=prompt_style,
-                        session_duration=session_duration
+                        session_duration=session_duration,
+                        feedback_text=feedback_reason
                     )
                 except Exception as db_error:
                     st.warning(f"フィードバックDB保存エラー: {db_error}")
@@ -255,7 +259,7 @@ class FeedbackManager:
             with open(self.feedback_file, "a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(
-                    [timestamp, product_name, session_id, satisfaction, messages_count, prompt_style, session_duration]
+                    [timestamp, product_name, session_id, satisfaction, messages_count, prompt_style, session_duration, feedback_reason]
                 )
 
             return True
@@ -322,10 +326,14 @@ class FeedbackManager:
 
             # フィードバックデータがある場合、session_idでマージ
             if feedback_df is not None and not feedback_df.empty:
-                # session_idでフィードバック情報を結合
+                # session_idでフィードバック情報を結合（feedback_reasonも含める）
+                feedback_columns = ['session_id', 'satisfaction', 'session_duration']
+                if 'feedback_reason' in feedback_df.columns:
+                    feedback_columns.append('feedback_reason')
+
                 combined_df = pd.merge(
                     chat_df,
-                    feedback_df[['session_id', 'satisfaction', 'session_duration']],
+                    feedback_df[feedback_columns],
                     on='session_id',
                     how='left'
                 )
@@ -334,6 +342,7 @@ class FeedbackManager:
                 combined_df = chat_df.copy()
                 combined_df['satisfaction'] = None
                 combined_df['session_duration'] = None
+                combined_df['feedback_reason'] = None
 
             # エクスポートファイル名生成
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -344,7 +353,7 @@ class FeedbackManager:
             column_order = [
                 'timestamp', 'product_name', 'session_id', 'user_message', 'bot_response',
                 'sources_used', 'prompt_style', 'message_length', 'response_length', 'sources_count',
-                'satisfaction', 'session_duration'
+                'satisfaction', 'session_duration', 'feedback_reason'
             ]
 
             # 存在する列のみ選択
@@ -395,6 +404,47 @@ class FeedbackManager:
             st.error(f"集計エラー: {str(e)}")
             return {}
 
+    def get_dissatisfaction_reasons(self, product_name: str = None) -> List[Dict[str, str]]:
+        """不満足の理由一覧を取得"""
+
+        try:
+            if not os.path.exists(self.feedback_file):
+                return []
+
+            df = pd.read_csv(self.feedback_file, encoding="utf-8")
+
+            # 製品フィルタリング
+            if product_name:
+                df = df[df["product_name"] == product_name]
+
+            # 不満足で理由が記入されているもののみ抽出
+            dissatisfied_df = df[
+                (df["satisfaction"] == "不満足") &
+                (df["feedback_reason"].notna()) &
+                (df["feedback_reason"].str.strip() != "")
+            ]
+
+            if dissatisfied_df.empty:
+                return []
+
+            # 結果を辞書のリストとして返す
+            reasons = []
+            for _, row in dissatisfied_df.iterrows():
+                reasons.append({
+                    "timestamp": row["timestamp"],
+                    "product_name": row["product_name"],
+                    "session_id": row["session_id"],
+                    "feedback_reason": row["feedback_reason"],
+                    "prompt_style": row.get("prompt_style", ""),
+                    "total_messages": row.get("total_messages", 0)
+                })
+
+            return reasons
+
+        except Exception as e:
+            st.error(f"不満足理由取得エラー: {str(e)}")
+            return []
+
     def get_recent_chats(self, product_name: str, limit: int = 10) -> List[Dict[str, Any]]:
         """最近のチャット履歴を取得"""
 
@@ -419,6 +469,7 @@ class FeedbackManager:
 
         survey_key = f"show_satisfaction_{product_name}"
         feedback_key = f"feedback_given_{product_name}"
+        dissatisfied_key = f"dissatisfied_selected_{product_name}"
 
         # まだフィードバックを送信していない場合のみ表示
         if len(st.session_state.get(f"messages_{product_name}", [])) >= 2 and not st.session_state.get(
@@ -449,15 +500,44 @@ class FeedbackManager:
                         help="期待した回答が得られなかった",
                         use_container_width=True,
                     ):
-                        self.save_feedback(product_name, "不満足", prompt_style)
-                        st.session_state[feedback_key] = True
-                        st.info("📋 フィードバックありがとうございます。改善に努めます。")
+                        # 不満足ボタンが押された場合、理由入力フォームを表示
+                        st.session_state[dissatisfied_key] = True
                         st.rerun()
 
                 with col3:
                     if st.button("⏭️ スキップ", key=f"skip_{product_name}", help="フィードバックを送信しない"):
                         st.session_state[feedback_key] = True
                         st.rerun()
+
+                # 不満足が選択された場合、理由入力フォームを表示
+                if st.session_state.get(dissatisfied_key, False):
+                    st.write("")  # スペース
+                    st.write("**不満足の理由をお聞かせください（任意）：**")
+
+                    feedback_reason = st.text_area(
+                        "改善のためのご意見をお聞かせください",
+                        placeholder="例：回答が不正確だった、情報が古かった、期待していた内容と違った など",
+                        key=f"feedback_reason_{product_name}",
+                        height=80
+                    )
+
+                    col_submit, col_skip_reason = st.columns([1, 1])
+
+                    with col_submit:
+                        if st.button("📤 送信", key=f"submit_feedback_{product_name}", use_container_width=True):
+                            self.save_feedback(product_name, "不満足", prompt_style, feedback_reason.strip())
+                            st.session_state[feedback_key] = True
+                            st.session_state[dissatisfied_key] = False
+                            st.info("📋 フィードバックありがとうございます。改善に努めます。")
+                            st.rerun()
+
+                    with col_skip_reason:
+                        if st.button("理由を入力せずに送信", key=f"skip_reason_{product_name}", use_container_width=True):
+                            self.save_feedback(product_name, "不満足", prompt_style, "")
+                            st.session_state[feedback_key] = True
+                            st.session_state[dissatisfied_key] = False
+                            st.info("📋 フィードバックありがとうございます。改善に努めます。")
+                            st.rerun()
 
                 st.caption("💡 **ヒント**: より良い回答を得るには、プロンプトスタイルを変更してみてください。")
 

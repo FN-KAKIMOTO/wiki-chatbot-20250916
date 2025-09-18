@@ -94,6 +94,8 @@ class WikiChatbot:
                 for i, item in enumerate(context, 1):
                     if "metadata" in item and "file_name" in item["metadata"]:
                         file_name = item["metadata"]["file_name"]
+                        metadata = item["metadata"]
+
                         # 重複チェック
                         if file_name not in [detail["file"] for detail in source_details]:
                             detail = {
@@ -101,13 +103,55 @@ class WikiChatbot:
                                 "content_preview": (
                                     item["content"][:150] + "..." if len(item["content"]) > 150 else item["content"]
                                 ),
+                                "reference": metadata.get("reference", ""),  # 参照データを取得
+                                "type": metadata.get("type", "document"),
+                                "question": metadata.get("question", ""),
+                                "answer": metadata.get("answer", ""),
+                                "chunk_index": metadata.get("chunk_index", ""),
+                                "similarity_score": item.get("similarity_score", 0.0),
                             }
                             source_details.append(detail)
 
                 # ソース情報をフォーマット
                 for i, detail in enumerate(source_details, 1):
                     source_text += f"\n**{i}. {detail['file']}**\n"
-                    source_text += f"```\n{detail['content_preview']}\n```\n"
+
+                    # Q&Aペアの場合は特別な表示
+                    if detail['type'] == 'qa_pair' and detail['question'] and detail['answer']:
+                        source_text += f"**Q:** {detail['question']}\n"
+                        source_text += f"**A:** {detail['answer']}\n"
+
+                        # 参照データがある場合は表示
+                        if detail['reference']:
+                            # URLっぽい場合はリンク形式、そうでなければプレーンテキスト
+                            if detail['reference'].startswith(('http://', 'https://')):
+                                source_text += f"**📖 参照:** [{detail['reference']}]({detail['reference']})\n"
+                            else:
+                                source_text += f"**📖 参照:** {detail['reference']}\n"
+                    else:
+                        # 通常の文書の場合
+                        file_name = detail['file']
+                        file_extension = file_name.split('.')[-1].upper() if '.' in file_name else 'FILE'
+
+                        # ファイル形式に応じたアイコン
+                        file_icon = {
+                            'PDF': '📄', 'TXT': '📝', 'DOCX': '📄', 'DOC': '📄',
+                            'PPTX': '📊', 'PPT': '📊', 'HTML': '🌐', 'MD': '📝'
+                        }.get(file_extension, '📄')
+
+                        source_text += f"**{file_icon} ファイル形式:** {file_extension}\n"
+
+                        # 類似度スコアがある場合は表示
+                        if detail.get('similarity_score', 0) > 0:
+                            similarity_percent = detail['similarity_score'] * 100
+                            source_text += f"**🎯 関連度:** {similarity_percent:.1f}%\n"
+
+                        # チャンク情報がある場合は表示
+                        if detail.get('chunk_index', '') != '':
+                            source_text += f"**📍 文書内位置:** セクション{detail['chunk_index'] + 1}\n"
+
+                        source_text += f"**📖 参照内容:**\n"
+                        source_text += f"```\n{detail['content_preview']}\n```\n"
 
                 response_text += source_text
 

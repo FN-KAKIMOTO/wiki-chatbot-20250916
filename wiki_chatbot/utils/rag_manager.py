@@ -90,6 +90,7 @@ class RAGManager:
                 # 列数をチェック
                 if len(df.columns) >= 2:
                     # 2列以上の場合、最初の列を質問、2番目の列を回答として処理
+                    # 3列目は参照データ（RAG処理には含めない）
                     question_col = df.columns[0]
                     answer_col = df.columns[1]
 
@@ -98,6 +99,7 @@ class RAGManager:
                         answer = str(row[answer_col]).strip()
 
                         if question and answer and question != "nan" and answer != "nan":
+                            # 参照データはRAG処理に含めない
                             qa_text = f"質問: {question}\n回答: {answer}"
                             qa_pairs.append(qa_text)
                 else:
@@ -127,34 +129,55 @@ class RAGManager:
                 question_col = df.columns[0]
                 answer_col = df.columns[1]
 
+                # 3列目があれば参照データとして扱う
+                reference_col = df.columns[2] if len(df.columns) >= 3 else None
+
                 qa_count = 0
                 for index, row in df.iterrows():
                     question = str(row[question_col]).strip()
                     answer = str(row[answer_col]).strip()
 
                     if question and answer and question != "nan" and answer != "nan":
+                        # RAG処理用テキスト（参照データは含めない）
                         qa_text = f"質問: {question}\n回答: {answer}"
                         doc_id = f"{file_hash}_qa_{index}"
 
+                        # 参照データの取得（あれば）
+                        reference_data = ""
+                        if reference_col and pd.notna(row[reference_col]):
+                            reference_data = str(row[reference_col]).strip()
+
+                        # メタデータに参照データを保存（検索結果表示用）
+                        metadata = {
+                            "file_name": file_name,
+                            "file_hash": file_hash,
+                            "qa_index": index,
+                            "product": product_name,
+                            "question": question,
+                            "answer": answer,
+                            "type": "qa_pair",
+                        }
+
+                        # 参照データがある場合のみ追加
+                        if reference_data:
+                            metadata["reference"] = reference_data
+
                         collection.add(
-                            documents=[qa_text],
-                            metadatas=[
-                                {
-                                    "file_name": file_name,
-                                    "file_hash": file_hash,
-                                    "qa_index": index,
-                                    "product": product_name,
-                                    "question": question,
-                                    "answer": answer,
-                                    "type": "qa_pair",
-                                }
-                            ],
+                            documents=[qa_text],  # 参照データはRAG処理に含めない
+                            metadatas=[metadata],
                             ids=[doc_id],
                         )
                         qa_count += 1
 
                 os.remove(temp_file_path)
-                st.success(f"✅ {qa_count}組のQ&Aペアを追加しました")
+                # 参照データ付きの件数も表示
+                reference_count = sum(1 for _, row in df.iterrows()
+                                    if reference_col and pd.notna(row[reference_col]) and str(row[reference_col]).strip())
+
+                if reference_count > 0:
+                    st.success(f"✅ {qa_count}組のQ&Aペア（うち{reference_count}件は参照データ付き）を追加しました")
+                else:
+                    st.success(f"✅ {qa_count}組のQ&Aペアを追加しました")
                 return True
             else:
                 st.error("CSVファイルには質問と回答の2列が必要です")
@@ -221,8 +244,13 @@ class RAGManager:
             if results["documents"] and results["documents"][0]:
                 for i in range(len(results["documents"][0])):
                     distance = results["distances"][0][i] if results["distances"] else 0.0
-                    # コサイン距離を類似度スコアに変換 (0=完全一致、1=全く異なる → 1=完全一致、0=全く異なる)
-                    similarity_score = 1.0 - distance
+
+                    # ChromaDBは cosine_distance = 1.0 - cosine_similarity を返す
+                    # したがって cosine_similarity = 1.0 - cosine_distance
+                    cosine_similarity = 1.0 - distance
+
+                    # 数値精度の問題で負になる可能性を考慮（実際は稀）
+                    similarity_score = max(0.0, min(1.0, cosine_similarity))
 
                     search_results.append(
                         {
@@ -235,30 +263,59 @@ class RAGManager:
 
             # デバッグ情報を出力（開発時のみ）
             if st.secrets.get("DEBUG_MODE", False):
-                st.write(f"🔍 検索クエリ: '{query}'")
+                st.write(f"🔍 検索クエリ: '{query}' (上位{len(search_results)}件)")
+                st.write("**ChromaDB計算式**: cosine_similarity = 1.0 - cosine_distance")
+
                 for i, result in enumerate(search_results[:3]):
-                    st.write(f"結果{i+1}: 距離={result['distance']:.4f}, 類似度={result['similarity_score']:.4f}")
+                    distance = result['distance']
+                    similarity = result['similarity_score']
+                    cosine_sim_check = 1.0 - distance
+                    st.write(f"結果{i+1}: 距離={distance:.4f}, 類似度={similarity:.4f} (検算: {cosine_sim_check:.4f})")
                     st.write(f"内容: {result['content'][:100]}...")
+
+                # ソート前後の順序確認
+                if len(search_results) > 1:
+                    distances = [r['distance'] for r in search_results]
+                    is_sorted = all(distances[i] <= distances[i+1] for i in range(len(distances)-1))
+                    st.write(f"📊 ChromaDB結果ソート状況: {'✅ 既にソート済み' if is_sorted else '❌ ソートが必要'}")
+
+                # 距離と類似度の範囲確認
+                min_dist, max_dist = min(distances), max(distances)
+                min_sim = min(r['similarity_score'] for r in search_results)
+                max_sim = max(r['similarity_score'] for r in search_results)
+                st.write(f"📊 範囲確認: 距離=[{min_dist:.4f}, {max_dist:.4f}], 類似度=[{min_sim:.4f}, {max_sim:.4f}]")
 
             # ChromaDBは既に距離順（小さい順）で返すが、念のため明示的にソート
             search_results.sort(key=lambda x: x["distance"])
 
-            # 関連度の低い結果をフィルタリング（閾値より高い距離をカット）
-            similarity_threshold = 0.7  # 設定から取得するか、デフォルト値
+            # 関連度の低い結果をフィルタリング
+            similarity_threshold = 0.7  # デフォルト値
             try:
                 # 現在のRAG設定から閾値を取得
                 _, rag_config = get_current_rag_config()
                 similarity_threshold = getattr(rag_config, 'similarity_threshold', 0.7)
-            except:
-                pass
+            except Exception as e:
+                # デバッグモード時のみエラー表示
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.warning(f"RAG設定取得エラー（デフォルト値0.7を使用): {e}")
+                similarity_threshold = 0.7
 
-            # 距離が閾値を超えるものを除外（距離が大きい = 類似度が低い）
-            filtered_results = [r for r in search_results if r["distance"] <= (1.0 - similarity_threshold)]
+            # 類似度が閾値以上のものを保持（より直感的）
+            filtered_results = [r for r in search_results if r["similarity_score"] >= similarity_threshold]
 
             if st.secrets.get("DEBUG_MODE", False) and len(filtered_results) < len(search_results):
                 st.write(f"⚠️ 関連度の低い結果を {len(search_results) - len(filtered_results)} 件除外しました")
 
-            return filtered_results if filtered_results else search_results[:1]  # 最低1件は返す
+            # フィルタリング後の結果処理
+            if filtered_results:
+                return filtered_results
+            elif search_results:
+                # フィルター後に結果がない場合、最も関連度の高い1件を返す
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.warning(f"全結果が閾値({similarity_threshold})を下回りました。最高スコア結果を返します。")
+                return search_results[:1]
+            else:
+                return []
 
         except Exception as e:
             st.error(f"Error searching: {e}")
