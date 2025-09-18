@@ -166,21 +166,8 @@ class WikiChatbot:
     def chat_interface(self, product_name: str):
         st.title(f"💬 {product_name} Wiki チャット")
 
-        # ユーザー名入力UI
-        user_name_key = f"user_name_{product_name}"
-        if user_name_key not in st.session_state:
-            st.session_state[user_name_key] = ""
-
-        with st.expander("🏷️ ユーザー情報（任意）", expanded=False):
-            user_name = st.text_input(
-                "お名前（分析用、任意）",
-                value=st.session_state[user_name_key],
-                placeholder="例: 田中太郎",
-                help="チャット履歴の分析用に使用されます。未入力でも利用可能です。",
-                key=f"user_name_input_{product_name}"
-            )
-            if user_name != st.session_state[user_name_key]:
-                st.session_state[user_name_key] = user_name
+        # ログイン情報からユーザー名を取得
+        user_name = self._get_current_user_info()
 
         # プロンプトスタイル選択UI
         self._show_prompt_style_selector(product_name)
@@ -362,7 +349,7 @@ class WikiChatbot:
             )
 
             # チャット履歴を保存
-            user_name = st.session_state.get(f"user_name_{product_name}", "")
+            user_name = self._get_current_user_info()
             feedback_manager.save_chat_message(
                 product_name=product_name,
                 user_message=prompt,
@@ -596,3 +583,15 @@ class WikiChatbot:
 
                 except Exception as e:
                     st.error(f"プレビュー生成エラー: {str(e)}")
+
+    def _get_current_user_info(self) -> str:
+        """現在のログインユーザー情報を取得"""
+        # 認証されている場合はユーザー情報を取得
+        if st.session_state.get("authenticated", False):
+            user_id = st.session_state.get("user_id", "")
+            if user_id:
+                # user_emailがあればそれを使用、なければuser_id@farmnote.jpを生成
+                user_email = st.session_state.get("user_email", f"{user_id}@farmnote.jp")
+                return user_email
+        # 認証されていない場合は空文字列
+        return ""

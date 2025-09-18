@@ -259,6 +259,65 @@ def show_chat_analytics():
                     st.write("**向上案:**")
                     st.write("• ユーザーフィードバックの詳細分析")
                     st.write("• より具体的な文書の追加")
+
+        # 不満足の理由分析を追加
+        st.divider()
+        st.subheader("📝 不満足の理由（詳細分析）")
+
+        dissatisfaction_reasons = feedback_manager.get_dissatisfaction_reasons(product_filter)
+
+        if dissatisfaction_reasons:
+            st.write(f"**不満足フィードバック: {len(dissatisfaction_reasons)}件**")
+
+            # 不満足理由を表として表示
+            import pandas as pd
+            reasons_df = pd.DataFrame(dissatisfaction_reasons)
+
+            # タイムスタンプでソート（最新順）
+            if 'timestamp' in reasons_df.columns:
+                reasons_df = reasons_df.sort_values('timestamp', ascending=False)
+
+            # 表示用に列を選択・整理
+            display_columns = ['timestamp', 'product_name', 'feedback_reason', 'prompt_style', 'total_messages']
+            available_columns = [col for col in display_columns if col in reasons_df.columns]
+
+            if available_columns:
+                display_df = reasons_df[available_columns].copy()
+
+                # 列名を日本語に変更
+                column_mapping = {
+                    'timestamp': '日時',
+                    'product_name': '商材',
+                    'feedback_reason': '不満足の理由',
+                    'prompt_style': 'プロンプトスタイル',
+                    'total_messages': 'メッセージ数'
+                }
+
+                display_df = display_df.rename(columns=column_mapping)
+
+                # インデックスを1から開始
+                display_df.index = range(1, len(display_df) + 1)
+
+                st.dataframe(display_df, use_container_width=True)
+
+                # フィードバック理由の要約
+                if 'feedback_reason' in reasons_df.columns:
+                    reasons_with_text = reasons_df[
+                        (reasons_df['feedback_reason'].notna()) &
+                        (reasons_df['feedback_reason'].str.strip() != '') &
+                        (reasons_df['feedback_reason'].str.strip() != '（理由未記録）')
+                    ]
+
+                    if len(reasons_with_text) > 0:
+                        with st.expander(f"💬 具体的な改善提案 ({len(reasons_with_text)}件)", expanded=False):
+                            for idx, reason_row in reasons_with_text.iterrows():
+                                st.write(f"**{reason_row.get('timestamp', '')}** - {reason_row.get('product_name', '')}:")
+                                st.quote(reason_row['feedback_reason'])
+                                st.write(f"*使用スタイル: {reason_row.get('prompt_style', 'N/A')}, メッセージ数: {reason_row.get('total_messages', 'N/A')}*")
+                                st.divider()
+        else:
+            st.info("不満足のフィードバックはありません。")
+
         else:
             st.info("まだ分析データがありません。チャット利用後に分析結果が表示されます。")
 

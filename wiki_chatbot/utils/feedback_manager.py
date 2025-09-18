@@ -404,11 +404,23 @@ class FeedbackManager:
 
             # フィードバックデータがある場合、session_idでマージ
             if feedback_df is not None and not feedback_df.empty:
+                # session_idのデータ型を統一（マージエラー対策）
+                try:
+                    chat_df['session_id'] = chat_df['session_id'].astype(str)
+                    feedback_df['session_id'] = feedback_df['session_id'].astype(str)
+                except Exception as e:
+                    st.warning(f"session_id型変換エラー: {e}")
+                    # 型変換に失敗した場合は文字列に強制変換
+                    chat_df['session_id'] = chat_df['session_id'].apply(str)
+                    feedback_df['session_id'] = feedback_df['session_id'].apply(str)
+
                 # デバッグ情報（開発時のみ表示）
                 if st.secrets.get("DEBUG_MODE", False):
                     st.write(f"🔍 マージ前データ確認:")
                     st.write(f"チャット履歴: {len(chat_df)}件")
                     st.write(f"フィードバック: {len(feedback_df)}件")
+                    st.write(f"チャットsession_id型: {chat_df['session_id'].dtype}")
+                    st.write(f"フィードバックsession_id型: {feedback_df['session_id'].dtype}")
                     st.write(f"共通session_id: {set(chat_df['session_id']) & set(feedback_df['session_id'])}")
 
                 # session_idでフィードバック情報を結合
@@ -416,12 +428,20 @@ class FeedbackManager:
                 # 存在する列のみを使用
                 available_feedback_columns = [col for col in feedback_columns if col in feedback_df.columns]
 
-                combined_df = pd.merge(
-                    chat_df,
-                    feedback_df[available_feedback_columns],
-                    on='session_id',
-                    how='left'
-                )
+                try:
+                    combined_df = pd.merge(
+                        chat_df,
+                        feedback_df[available_feedback_columns],
+                        on='session_id',
+                        how='left'
+                    )
+                except Exception as merge_error:
+                    st.error(f"マージエラー: {merge_error}")
+                    st.warning("フィードバックデータなしでエクスポートします")
+                    combined_df = chat_df.copy()
+                    combined_df['satisfaction'] = None
+                    combined_df['session_duration'] = None
+                    combined_df['feedback_reason'] = None
 
                 # デバッグ情報（開発時のみ表示）
                 if st.secrets.get("DEBUG_MODE", False):

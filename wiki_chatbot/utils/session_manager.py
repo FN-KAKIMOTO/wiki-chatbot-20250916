@@ -63,6 +63,14 @@ import streamlit as st
 
 from config.web_settings import WebConfig
 
+# GitHub同期のインポート
+try:
+    from config.github_settings import GitHubConfig
+    from utils.github_sync import GitHubDataSync
+    GITHUB_SYNC_AVAILABLE = True
+except ImportError:
+    GITHUB_SYNC_AVAILABLE = False
+
 
 class SessionManager:
     """Webアプリケーション用セッション管理クラス。
@@ -194,8 +202,15 @@ class SessionManager:
                 if password == os.getenv("SHARED_PASSWORD"):
                     st.session_state.authenticated = True
                     st.session_state.user_id = email.split("@")[0]  # メールアドレスの@より前の部分をユーザーIDとして使用
+                    st.session_state.user_email = email  # 完全なメールアドレスも保存
                     st.session_state.session_start_time = time.time()
+
+                    # 認証成功メッセージを表示
                     st.success("✅ 認証成功")
+
+                    # ログイン時の自動データ復元を実行
+                    SessionManager._perform_login_data_restore()
+
                     st.rerun()
                 else:
                     st.error("❌ パスワードが正しくありません")
@@ -284,6 +299,7 @@ class SessionManager:
         """
         st.session_state.authenticated = False
         st.session_state.user_id = None
+        st.session_state.user_email = None
         st.session_state.chat_history = []
         st.success("✅ ログアウトしました")
         st.rerun()
@@ -326,8 +342,119 @@ class SessionManager:
 
             # ログアウトボタン
             if session_info["authenticated"]:
+                # データ復元状況の表示
+                if GITHUB_SYNC_AVAILABLE and GitHubConfig.is_configured():
+                    try:
+                        config = GitHubConfig.get_config()
+                        github_sync = GitHubDataSync(
+                            repo_url=config["repo_url"],
+                            token=config["token"]
+                        )
+                        sync_status = github_sync.get_sync_status()
+
+                        if sync_status["chroma_db_exists"] or sync_status["sqlite_db_exists"]:
+                            st.info("💾 データ同期済み")
+                        else:
+                            st.warning("📥 データ未同期")
+
+                        # 復元状況のみ表示（手動復元ボタンはapp.pyのサイドバーに統合）
+
+                    except Exception:
+                        st.caption("📊 同期状況確認不可")
+
                 if st.button("🚪 ログアウト"):
                     SessionManager.logout()
+
+    @staticmethod
+    def _perform_login_data_restore() -> None:
+        """ログイン時の自動データ復元を実行する。
+
+        GitHub同期が設定されている場合、ログイン認証成功時に
+        自動的にデータ復元（ダウンロード）を実行します。
+
+        処理内容:
+            1. GitHub同期設定の確認
+            2. GitHubDataSyncインスタンスの初期化
+            3. データ復元の実行
+            4. 結果の表示（成功/失敗メッセージ）
+
+        Note:
+            - エラーが発生しても認証プロセスは継続されます
+            - デバッグモードでは詳細な処理状況を表示します
+            - GitHub同期が無効な場合はスキップされます
+        """
+        # GitHub同期が利用可能かチェック
+        if not GITHUB_SYNC_AVAILABLE:
+            if st.secrets.get("DEBUG_MODE", False):
+                st.info("🔄 GitHub同期機能が利用できません（スキップ）")
+            return
+
+        # GitHub設定の確認
+        if not GitHubConfig.is_configured():
+            if st.secrets.get("DEBUG_MODE", False):
+                st.info("🔄 GitHub同期が設定されていません（スキップ）")
+            return
+
+        try:
+            # GitHub同期の初期化
+            config = GitHubConfig.get_config()
+            github_sync = GitHubDataSync(
+                repo_url=config["repo_url"],
+                token=config["token"]
+            )
+
+            # 現在のデータ状況を確認
+            sync_status = github_sync.get_sync_status()
+            has_local_data = sync_status["chroma_db_exists"] or sync_status["sqlite_db_exists"]
+
+            if has_local_data:
+                # 既存データがある場合の処理
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.info("📁 ローカルデータが存在します - GitHubとの同期を確認中...")
+
+                # より新しいデータがあるかチェックして同期
+                with st.spinner("🔄 データ同期確認中..."):
+                    success = github_sync.download_data()
+
+                if success:
+                    st.success("✅ データ同期完了 - 最新データで開始します")
+                else:
+                    st.info("💾 既存のローカルデータで開始します")
+            else:
+                # ローカルデータがない場合の復元処理
+                st.info("📥 初回ログイン - GitHubからデータを復元中...")
+
+                with st.spinner("🔄 データ復元中..."):
+                    success = github_sync.download_data()
+
+                if success:
+                    st.success("✅ データ復元完了 - GitHubから最新データを取得しました")
+                else:
+                    st.info("🆕 新規環境として開始します")
+
+            # デバッグモードでの詳細表示
+            if st.secrets.get("DEBUG_MODE", False):
+                updated_sync_status = github_sync.get_sync_status()
+                st.write("📊 **同期後の状況**:")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**ChromaDB:**", "✅" if updated_sync_status["chroma_db_exists"] else "❌")
+                    if updated_sync_status["chroma_db_exists"]:
+                        st.caption(f"サイズ: {updated_sync_status['chroma_db_size']:,} bytes")
+                with col2:
+                    st.write("**SQLiteDB:**", "✅" if updated_sync_status["sqlite_db_exists"] else "❌")
+                    if updated_sync_status["sqlite_db_exists"]:
+                        st.caption(f"サイズ: {updated_sync_status['sqlite_db_size']:,} bytes")
+
+        except Exception as e:
+            # エラーが発生してもログインプロセスは継続
+            st.warning(f"⚠️ ログイン時データ復元エラー: {str(e)}")
+            if st.secrets.get("DEBUG_MODE", False):
+                st.error(f"詳細エラー: {e}")
+
+        # 処理完了メッセージ
+        if st.secrets.get("DEBUG_MODE", False):
+            st.info("🔄 ログイン時データ復元処理完了")
 
 
 class DataPersistence:
