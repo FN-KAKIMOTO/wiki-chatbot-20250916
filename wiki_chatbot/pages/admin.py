@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """管理画面モジュール。
 
 このモジュールは、WikiチャットボットアプリケーションのStreamlitベース
@@ -318,8 +319,8 @@ def show_chat_analytics():
         else:
             st.info("不満足のフィードバックはありません。")
 
-        else:
-            st.info("まだ分析データがありません。チャット利用後に分析結果が表示されます。")
+    else:
+        st.info("まだ分析データがありません。チャット利用後に分析結果が表示されます。")
 
 
 def show_data_export():
