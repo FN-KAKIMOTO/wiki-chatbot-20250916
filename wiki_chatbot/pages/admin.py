@@ -203,11 +203,15 @@ def show_chat_analytics():
         feedback_summary = feedback_manager.get_feedback_summary(product_filter)
 
         if feedback_summary:
+            # フィードバック情報表示
+            st.info("📊 **チャット単位フィードバック分析**")
+
             # KPI表示
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
-                st.metric("総セッション数", feedback_summary.get("total_sessions", 0))
+                total_chats = feedback_summary.get("total_chats", 0)
+                st.metric("総チャット数", total_chats)
 
             with col2:
                 satisfaction_rate = feedback_summary.get("satisfaction_rate", 0)
@@ -218,16 +222,16 @@ def show_chat_analytics():
                 )
 
             with col3:
-                avg_messages = feedback_summary.get("avg_messages_per_session", 0)
+                unique_sessions = feedback_summary.get("unique_sessions", 0)
+                avg_chats_per_session = total_chats / unique_sessions if unique_sessions > 0 else 0
                 st.metric(
-                    "平均メッセージ数/セッション",
-                    f"{avg_messages:.1f}",
-                    delta=f"{avg_messages - 5:.1f}" if avg_messages > 0 else None,
+                    "平均チャット数/セッション",
+                    f"{avg_chats_per_session:.1f}",
+                    delta=f"{avg_chats_per_session - 3:.1f}" if avg_chats_per_session > 0 else None,
                 )
 
             with col4:
-                avg_duration = feedback_summary.get("avg_session_duration", 0)
-                st.metric("平均セッション時間", f"{avg_duration:.1f}分")
+                st.metric("ユニークセッション数", unique_sessions)
 
             st.divider()
 
@@ -283,21 +287,21 @@ def show_chat_analytics():
             if 'timestamp' in reasons_df.columns:
                 reasons_df = reasons_df.sort_values('timestamp', ascending=False)
 
-            # 表示用に列を選択・整理
-            display_columns = ['timestamp', 'product_name', 'feedback_reason', 'prompt_style', 'total_messages']
+            # 表示用列の選択・整理
+            display_columns = ['timestamp', 'product_name', 'user_question', 'bot_answer', 'feedback_reason', 'prompt_style']
+            column_mapping = {
+                'timestamp': '日時',
+                'product_name': '商材',
+                'user_question': 'ユーザー質問',
+                'bot_answer': 'Bot回答',
+                'feedback_reason': '不満足の理由',
+                'prompt_style': 'プロンプトスタイル'
+            }
+
             available_columns = [col for col in display_columns if col in reasons_df.columns]
 
             if available_columns:
                 display_df = reasons_df[available_columns].copy()
-
-                # 列名を日本語に変更
-                column_mapping = {
-                    'timestamp': '日時',
-                    'product_name': '商材',
-                    'feedback_reason': '不満足の理由',
-                    'prompt_style': 'プロンプトスタイル',
-                    'total_messages': 'メッセージ数'
-                }
 
                 display_df = display_df.rename(columns=column_mapping)
 
@@ -318,8 +322,22 @@ def show_chat_analytics():
                         with st.expander(f"💬 具体的な改善提案 ({len(reasons_with_text)}件)", expanded=False):
                             for idx, reason_row in reasons_with_text.iterrows():
                                 st.write(f"**{reason_row.get('timestamp', '')}** - {reason_row.get('product_name', '')}:")
-                                st.quote(reason_row['feedback_reason'])
-                                st.write(f"*使用スタイル: {reason_row.get('prompt_style', 'N/A')}, メッセージ数: {reason_row.get('total_messages', 'N/A')}*")
+
+                                # Q&Aペアを表示
+                                with st.expander("📋 対象のQ&Aペア", expanded=False):
+                                    st.write(f"**質問:** {reason_row.get('user_question', 'N/A')}")
+                                    st.write(f"**回答:** {reason_row.get('bot_answer', 'N/A')}")
+
+                                # フィードバック理由を安全に取得
+                                feedback_reason = reason_row.get('feedback_reason', '（理由なし）')
+                                if feedback_reason and str(feedback_reason).strip():
+                                    st.quote(feedback_reason)
+                                else:
+                                    st.write("*理由の記載なし*")
+
+                                # メタ情報の表示
+                                st.write(f"*使用スタイル: {reason_row.get('prompt_style', 'N/A')}, チャットID: {reason_row.get('chat_id', 'N/A')}*")
+
                                 st.divider()
         else:
             st.info("不満足のフィードバックはありません。")
@@ -365,13 +383,17 @@ def show_chat_analytics():
             product_stats = []
             for product in existing_products:
                 product_summary = feedback_manager.get_feedback_summary(product)
-                if product_summary and product_summary.get("total_sessions", 0) > 0:
+                if product_summary and product_summary.get("total_chats", 0) > 0:
+                    unique_sessions = product_summary.get("unique_sessions", 0)
+                    total_chats = product_summary.get("total_chats", 0)
+                    avg_chats_per_session = total_chats / unique_sessions if unique_sessions > 0 else 0
+
                     product_stats.append({
                         "商材": product,
-                        "セッション数": product_summary.get("total_sessions", 0),
+                        "チャット数": total_chats,
+                        "セッション数": unique_sessions,
                         "満足度(%)": round(product_summary.get("satisfaction_rate", 0), 1),
-                        "平均メッセージ数": round(product_summary.get("avg_messages_per_session", 0), 1),
-                        "平均時間(分)": round(product_summary.get("avg_session_duration", 0), 1)
+                        "平均チャット数/セッション": round(avg_chats_per_session, 1)
                     })
 
             if product_stats:
