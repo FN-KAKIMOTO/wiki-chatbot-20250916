@@ -126,11 +126,39 @@ class RAGManager:
             df = pd.read_csv(temp_file_path)
 
             if len(df.columns) >= 2:
-                question_col = df.columns[0]
-                answer_col = df.columns[1]
+                # カラム名を検証して適切に設定（類似語も検出）
+                def find_column_by_keywords(columns, keywords):
+                    """キーワードリストからカラムを検索"""
+                    for col in columns:
+                        if any(keyword in str(col).lower() for keyword in keywords):
+                            return col
+                    return None
 
-                # 3列目があれば参照データとして扱う
-                reference_col = df.columns[2] if len(df.columns) >= 3 else None
+                # カラム候補の定義
+                question_keywords = ["質問", "question", "q", "問", "問い"]
+                answer_keywords = ["回答", "答え", "answer", "a", "応答", "回"]
+                reference_keywords = ["参考", "参照", "reference", "ref", "リンク", "link", "url", "出典"]
+
+                # 各カラムを検索
+                question_col = find_column_by_keywords(df.columns, question_keywords)
+                answer_col = find_column_by_keywords(df.columns, answer_keywords)
+                reference_col = find_column_by_keywords(df.columns, reference_keywords)
+
+                # 見つからない場合は位置ベースでフォールバック
+                if not question_col:
+                    question_col = df.columns[0]
+                if not answer_col:
+                    answer_col = df.columns[1]
+                if not reference_col and len(df.columns) >= 3:
+                    reference_col = df.columns[2]
+
+                # デバッグ情報表示
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.write(f"🔍 **CSV カラム自動検出結果**:")
+                    st.write(f"- 検出されたカラム: {list(df.columns)}")
+                    st.write(f"- 質問カラム: '{question_col}'")
+                    st.write(f"- 回答カラム: '{answer_col}'")
+                    st.write(f"- 参照カラム: '{reference_col}'")
 
                 qa_count = 0
                 for index, row in df.iterrows():
@@ -173,6 +201,13 @@ class RAGManager:
                 # 参照データ付きの件数も表示
                 reference_count = sum(1 for _, row in df.iterrows()
                                     if reference_col and pd.notna(row[reference_col]) and str(row[reference_col]).strip())
+
+                # 詳細なサマリー情報を表示
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.write(f"🔍 **CSV処理サマリー**: {file_name}")
+                    st.write(f"- 検出カラム: {list(df.columns)}")
+                    st.write(f"- 使用カラム: 質問='{question_col}', 回答='{answer_col}', 参照='{reference_col}'")
+                    st.write(f"- 総行数: {len(df)}, 処理済み: {qa_count}")
 
                 if reference_count > 0:
                     st.success(f"✅ {qa_count}組のQ&Aペア（うち{reference_count}件は参照データ付き）を追加しました")

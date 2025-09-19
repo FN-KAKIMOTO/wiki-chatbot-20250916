@@ -46,6 +46,8 @@ class ChatMessage:
         prompt_style: 生成に使用されたプロンプトのタイプ。
         session_id: チャットセッションの一意識別子。
         user_name: ユーザー名（任意）。
+        chat_id: 個別チャット交換の一意識別子。
+        message_sequence: セッション内でのチャット順序番号。
     """
 
     timestamp: str
@@ -56,6 +58,8 @@ class ChatMessage:
     prompt_style: str
     session_id: str
     user_name: str = ""
+    chat_id: str = ""
+    message_sequence: int = 0
 
 
 @dataclass
@@ -165,6 +169,8 @@ class FeedbackManager:
                 "prompt_style",
                 "session_id",
                 "user_name",
+                "chat_id",
+                "message_sequence",
                 "message_length",
                 "response_length",
                 "sources_count",
@@ -200,6 +206,21 @@ class FeedbackManager:
             st.session_state[f"session_start_{product_name}"] = datetime.now()
 
         return st.session_state[session_key]
+
+    def get_next_message_sequence(self, product_name: str) -> int:
+        """セッション内での次のメッセージ順序番号を取得"""
+        session_id = self.get_session_id(product_name)
+        sequence_key = f"message_sequence_{session_id}"
+
+        if sequence_key not in st.session_state:
+            st.session_state[sequence_key] = 0
+
+        st.session_state[sequence_key] += 1
+        return st.session_state[sequence_key]
+
+    def generate_chat_id(self, session_id: str, sequence: int) -> str:
+        """チャットIDを生成（session_id + sequence番号）"""
+        return f"{session_id}_msg_{sequence:03d}"
 
     def _trigger_auto_backup(self, action: str = "Auto backup"):
         """自動バックアップをトリガーする"""
@@ -245,6 +266,10 @@ class FeedbackManager:
             session_id = self.get_session_id(product_name)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            # チャットIDとシーケンス番号を生成
+            message_sequence = self.get_next_message_sequence(product_name)
+            chat_id = self.generate_chat_id(session_id, message_sequence)
+
             # ボットの回答から参考情報源部分を除去してクリーンな回答のみ抽出
             clean_response = bot_response.split("---\n### 📚 参考にした情報源")[0].strip()
             sources_string = "; ".join(sources_used)
@@ -276,6 +301,8 @@ class FeedbackManager:
                         prompt_style,
                         session_id,
                         user_name,
+                        chat_id,
+                        message_sequence,
                         len(user_message),
                         len(clean_response),
                         len(sources_used),
@@ -369,6 +396,69 @@ class FeedbackManager:
             st.error(f"エクスポートエラー: {str(e)}")
             return None
 
+    def export_conversation_format(self, product_name: str = None) -> Optional[str]:
+        """会話形式でチャット履歴をエクスポート（Q&Aペア構造）"""
+
+        try:
+            if not os.path.exists(self.chat_log_file):
+                return None
+
+            df = pd.read_csv(self.chat_log_file, encoding="utf-8")
+
+            # 後方互換性のための列補完
+            if 'chat_id' not in df.columns:
+                df['chat_id'] = df.apply(lambda row: f"{row.get('session_id', 'unknown')}_msg_{row.name+1:03d}", axis=1)
+            if 'message_sequence' not in df.columns:
+                df['message_sequence'] = df.groupby('session_id').cumcount() + 1
+
+            # 製品フィルタリング
+            if product_name:
+                df = df[df["product_name"] == product_name]
+
+            if df.empty:
+                return None
+
+            # セッション毎にグループ化してソート
+            df = df.sort_values(['session_id', 'message_sequence'])
+
+            # 会話形式データの作成
+            conversations = []
+            for session_id, session_group in df.groupby('session_id'):
+                for _, row in session_group.iterrows():
+                    conversation_entry = {
+                        'session_id': session_id,
+                        'chat_id': row['chat_id'],
+                        'message_sequence': row['message_sequence'],
+                        'timestamp': row['timestamp'],
+                        'product_name': row['product_name'],
+                        'user_name': row.get('user_name', ''),
+                        'user_question': row['user_message'],
+                        'bot_answer': row['bot_response'],
+                        'reference_sources': row['sources_used'],
+                        'prompt_style': row['prompt_style'],
+                        'question_length': row.get('message_length', len(row['user_message'])),
+                        'answer_length': row.get('response_length', len(row['bot_response'])),
+                        'sources_count': row.get('sources_count', 0)
+                    }
+                    conversations.append(conversation_entry)
+
+            # DataFrameに変換
+            conversation_df = pd.DataFrame(conversations)
+
+            # エクスポートファイル名生成
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            export_filename = f"conversation_export_{product_name or 'all'}_{timestamp}.csv"
+            export_path = os.path.join(self.data_dir, export_filename)
+
+            # CSVエクスポート
+            conversation_df.to_csv(export_path, index=False, encoding="utf-8-sig")
+
+            return export_path
+
+        except Exception as e:
+            st.error(f"会話形式エクスポートエラー: {str(e)}")
+            return None
+
     def export_combined_data(self, product_name: str = None) -> Optional[str]:
         """チャット履歴とフィードバックを統合してエクスポート"""
 
@@ -383,6 +473,12 @@ class FeedbackManager:
             # チャット履歴に不足している列を追加（後方互換性のため）
             if 'user_name' not in chat_df.columns:
                 chat_df['user_name'] = ""
+            if 'chat_id' not in chat_df.columns:
+                # 既存データに対してchat_idを生成
+                chat_df['chat_id'] = chat_df.apply(lambda row: f"{row.get('session_id', 'unknown')}_msg_{row.name+1:03d}", axis=1)
+            if 'message_sequence' not in chat_df.columns:
+                # セッション毎に連番を付与
+                chat_df['message_sequence'] = chat_df.groupby('session_id').cumcount() + 1
 
             # フィードバックデータを読み込み（存在する場合）
             feedback_df = None
@@ -467,11 +563,11 @@ class FeedbackManager:
             export_filename = f"combined_export_{product_name or 'all'}_{timestamp}.csv"
             export_path = os.path.join(self.data_dir, export_filename)
 
-            # 列の順序を整理
+            # 列の順序を整理（新しいフィールドを含む）
             column_order = [
-                'timestamp', 'product_name', 'session_id', 'user_name', 'user_message', 'bot_response',
-                'sources_used', 'prompt_style', 'message_length', 'response_length', 'sources_count',
-                'satisfaction', 'session_duration', 'feedback_reason'
+                'timestamp', 'product_name', 'session_id', 'chat_id', 'message_sequence', 'user_name',
+                'user_message', 'bot_response', 'sources_used', 'prompt_style', 'message_length',
+                'response_length', 'sources_count', 'satisfaction', 'session_duration', 'feedback_reason'
             ]
 
             # 存在する列のみ選択

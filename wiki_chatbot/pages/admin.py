@@ -181,18 +181,23 @@ def show_chat_analytics():
         st.info("分析対象の商材がありません。先にファイル管理から商材を登録してください。")
         return
 
-    # 商材選択
-    selected_products = st.multiselect("分析対象の商材を選択", ["全商材"] + existing_products, default=["全商材"])
+    # 商材選択（単一選択に変更）
+    product_options = ["全商材"] + existing_products
+    selected_product = st.selectbox("分析対象の商材を選択", product_options, key="analysis_product_select")
 
-    if "全商材" in selected_products:
+    if selected_product == "全商材":
         product_filter = None
         analysis_title = "全商材"
     else:
-        product_filter = selected_products[0] if selected_products else None
-        analysis_title = product_filter or "商材未選択"
+        product_filter = selected_product
+        analysis_title = selected_product
 
-    if product_filter or "全商材" in selected_products:
+    if selected_product:
         st.subheader(f"📈 {analysis_title} の利用統計")
+
+        # デバッグ情報（必要に応じて表示）
+        if st.secrets.get("DEBUG_MODE", False):
+            st.write(f"🔍 **デバッグ**: selected_product='{selected_product}', product_filter='{product_filter}'")
 
         # フィードバック統計取得
         feedback_summary = feedback_manager.get_feedback_summary(product_filter)
@@ -319,6 +324,76 @@ def show_chat_analytics():
         else:
             st.info("不満足のフィードバックはありません。")
 
+        # 商材固有の追加分析
+        if product_filter:  # 特定商材が選択されている場合
+            st.divider()
+            st.subheader(f"📊 {product_filter} 固有分析")
+
+            # チャット履歴分析
+            recent_chats = feedback_manager.get_recent_chats(product_filter, limit=20)
+            if recent_chats:
+                st.write(f"**最近のチャット履歴: {len(recent_chats)}件**")
+
+                # 使用されたプロンプトスタイルの分布
+                prompt_styles = [chat.get('prompt_style', 'unknown') for chat in recent_chats]
+                if prompt_styles:
+                    import pandas as pd
+                    prompt_df = pd.DataFrame({'prompt_style': prompt_styles})
+                    prompt_counts = prompt_df['prompt_style'].value_counts()
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write("**プロンプトスタイル使用分布:**")
+                        for style, count in prompt_counts.items():
+                            st.write(f"• {style}: {count}件")
+
+                    with col2:
+                        # 平均メッセージ長
+                        avg_msg_length = sum(chat.get('message_length', 0) for chat in recent_chats) / len(recent_chats)
+                        avg_res_length = sum(chat.get('response_length', 0) for chat in recent_chats) / len(recent_chats)
+
+                        st.metric("平均質問文字数", f"{avg_msg_length:.0f}文字")
+                        st.metric("平均回答文字数", f"{avg_res_length:.0f}文字")
+            else:
+                st.info(f"{product_filter} のチャット履歴がありません。")
+
+        elif selected_product == "全商材":  # 全商材選択時の特別分析
+            st.divider()
+            st.subheader("📊 商材別比較分析")
+
+            # 各商材の統計を取得
+            product_stats = []
+            for product in existing_products:
+                product_summary = feedback_manager.get_feedback_summary(product)
+                if product_summary and product_summary.get("total_sessions", 0) > 0:
+                    product_stats.append({
+                        "商材": product,
+                        "セッション数": product_summary.get("total_sessions", 0),
+                        "満足度(%)": round(product_summary.get("satisfaction_rate", 0), 1),
+                        "平均メッセージ数": round(product_summary.get("avg_messages_per_session", 0), 1),
+                        "平均時間(分)": round(product_summary.get("avg_session_duration", 0), 1)
+                    })
+
+            if product_stats:
+                import pandas as pd
+                stats_df = pd.DataFrame(product_stats)
+
+                st.write("**商材別パフォーマンス一覧:**")
+                st.dataframe(stats_df, use_container_width=True)
+
+                # トップパフォーマンスの商材を表示
+                if len(stats_df) > 1:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        top_satisfaction = stats_df.loc[stats_df["満足度(%)"].idxmax()]
+                        st.success(f"🏆 **満足度最高**: {top_satisfaction['商材']} ({top_satisfaction['満足度(%)']}%)")
+
+                    with col2:
+                        top_usage = stats_df.loc[stats_df["セッション数"].idxmax()]
+                        st.info(f"📈 **利用数最多**: {top_usage['商材']} ({top_usage['セッション数']}セッション)")
+            else:
+                st.info("商材別の統計データがありません。")
+
     else:
         st.info("まだ分析データがありません。チャット利用後に分析結果が表示されます。")
 
@@ -340,63 +415,82 @@ def show_data_export():
     # 統合エクスポートの説明
     with st.expander("💡 エクスポート機能について"):
         st.write("""
-        **チャット履歴のみ**:
-        - ユーザーメッセージ、Bot回答、参考資料、セッション情報
-        - チャット内容の詳細分析に適している
+        **💬 会話形式（Q&Aペア）**:
+        - 質問と回答がペアになった読みやすい形式
+        - chat_id、message_sequence で会話の順序を管理
+        - 一般的な分析や報告書作成に最適
 
-        **統合データ（履歴+フィードバック）**:
+        **📄 チャット履歴（詳細）**:
+        - 全てのメタデータを含む詳細な生ログ形式
+        - timestamp、sources_used等の技術的詳細情報
+        - システム分析や技術的検証に適している
+
+        **📊 統合データ（履歴+フィードバック）**:
         - チャット履歴 + ユーザーフィードバック（満足度、不満足理由等）
         - セッションIDで関連付けられた統合データ
         - 満足度分析や改善点の特定に適している
 
-        **フィードバックデータのみ**:
+        **📋 フィードバックデータのみ**:
         - ユーザー満足度、セッション時間、不満足理由
         - 満足度推移の分析に適している
         """)
 
-    # エクスポート対象の選択
-    export_products = st.multiselect("エクスポート対象商材", ["全商材"] + existing_products, default=["全商材"])
+    # エクスポート対象の選択（単一選択に変更）
+    export_product_options = ["全商材"] + existing_products
+    selected_export_product = st.selectbox("エクスポート対象商材", export_product_options, key="export_product_select")
+
+    # 選択された商材の情報表示
+    if selected_export_product == "全商材":
+        st.info(f"📊 **エクスポート対象**: 全{len(existing_products)}商材のデータ")
+    else:
+        st.info(f"📊 **エクスポート対象**: {selected_export_product} の個別データ")
 
     st.write("**エクスポートしたいデータを選択してください：**")
 
-    # エクスポートボタンを3つに分ける
-    col_btn1, col_btn2, col_btn3 = st.columns(3)
+    # エクスポートボタンを4つに分ける
+    col_btn1, col_btn2 = st.columns(2)
+    col_btn3, col_btn4 = st.columns(2)
 
     with col_btn1:
-        if st.button("📄 チャット履歴のみ", use_container_width=True):
-            _export_data(export_products, existing_products, "chat_only")
+        if st.button("💬 会話形式（Q&Aペア）", use_container_width=True, help="質問と回答がペアになった読みやすい形式"):
+            _export_data(selected_export_product, "conversation")
 
     with col_btn2:
-        if st.button("📊 統合データ（履歴+フィードバック）", use_container_width=True):
-            _export_data(export_products, existing_products, "combined")
+        if st.button("📄 チャット履歴（詳細）", use_container_width=True, help="全てのメタデータを含む詳細形式"):
+            _export_data(selected_export_product, "chat_only")
 
     with col_btn3:
+        if st.button("📊 統合データ（履歴+フィードバック）", use_container_width=True):
+            _export_data(selected_export_product, "combined")
+
+    with col_btn4:
         if st.button("📋 フィードバックデータのみ", use_container_width=True):
             _export_feedback_only()
 
-def _export_data(export_products, existing_products, export_type):
+def _export_data(selected_product, export_type):
     """エクスポート実行の共通処理"""
-    if "全商材" in export_products:
+    if selected_product == "全商材":
         # 全商材のエクスポート
         if export_type == "combined":
             export_path = feedback_manager.export_combined_data()
             export_name = "全商材統合データ"
+        elif export_type == "conversation":
+            export_path = feedback_manager.export_conversation_format()
+            export_name = "全商材会話形式"
         else:
             export_path = feedback_manager.export_chat_history()
             export_name = "全商材チャット履歴"
     else:
         # 個別商材のエクスポート
-        product_name = export_products[0] if export_products else None
-        if product_name:
-            if export_type == "combined":
-                export_path = feedback_manager.export_combined_data(product_name)
-                export_name = f"{product_name}統合データ"
-            else:
-                export_path = feedback_manager.export_chat_history(product_name)
-                export_name = f"{product_name}チャット履歴"
+        if export_type == "combined":
+            export_path = feedback_manager.export_combined_data(selected_product)
+            export_name = f"{selected_product}統合データ"
+        elif export_type == "conversation":
+            export_path = feedback_manager.export_conversation_format(selected_product)
+            export_name = f"{selected_product}会話形式"
         else:
-            st.warning("エクスポート対象を選択してください")
-            return
+            export_path = feedback_manager.export_chat_history(selected_product)
+            export_name = f"{selected_product}チャット履歴"
 
     if export_path and os.path.exists(export_path):
         st.success(f"✅ {export_name}のエクスポートが完了しました")
