@@ -312,39 +312,80 @@ def show_chat_analytics():
 
                 # フィードバック理由の要約
                 if 'feedback_reason' in reasons_df.columns:
-                    # feedback_reason列を安全に文字列として処理
-                    reasons_df_safe = reasons_df.copy()
-                    reasons_df_safe['feedback_reason'] = reasons_df_safe['feedback_reason'].astype(str)
+                    try:
+                        # feedback_reason列を安全に文字列として処理
+                        reasons_df_safe = reasons_df.copy()
 
-                    reasons_with_text = reasons_df_safe[
-                        (reasons_df_safe['feedback_reason'].notna()) &
-                        (reasons_df_safe['feedback_reason'] != 'nan') &
-                        (reasons_df_safe['feedback_reason'].str.strip() != '') &
-                        (reasons_df_safe['feedback_reason'].str.strip() != '（理由未記録）') &
-                        (reasons_df_safe['feedback_reason'].str.strip() != '（理由なし）')
-                    ]
+                        # NaN値を先に空文字列に置換
+                        reasons_df_safe['feedback_reason'] = reasons_df_safe['feedback_reason'].fillna('')
+
+                        # 文字列型に変換
+                        reasons_df_safe['feedback_reason'] = reasons_df_safe['feedback_reason'].astype(str)
+
+                        # 意味のあるフィードバックのみを抽出
+                        def has_meaningful_feedback(value):
+                            if pd.isna(value):
+                                return False
+                            str_value = str(value).strip()
+                            return (
+                                str_value != '' and
+                                str_value != 'nan' and
+                                str_value != '（理由未記録）' and
+                                str_value != '（理由なし）' and
+                                len(str_value) > 0
+                            )
+
+                        reasons_with_text = reasons_df_safe[
+                            reasons_df_safe['feedback_reason'].apply(has_meaningful_feedback)
+                        ]
+                    except Exception as feedback_error:
+                        st.warning(f"フィードバック理由の処理中にエラーが発生しました: {str(feedback_error)}")
+                        reasons_with_text = pd.DataFrame()  # 空のDataFrame
 
                     if len(reasons_with_text) > 0:
                         with st.expander(f"💬 具体的な改善提案 ({len(reasons_with_text)}件)", expanded=False):
                             for idx, reason_row in reasons_with_text.iterrows():
-                                st.write(f"**{reason_row.get('timestamp', '')}** - {reason_row.get('product_name', '')}:")
+                                try:
+                                    # 基本情報を安全に取得
+                                    timestamp = str(reason_row.get('timestamp', '')).strip()
+                                    product_name = str(reason_row.get('product_name', '')).strip()
+                                    st.write(f"**{timestamp}** - {product_name}:")
 
-                                # Q&Aペアを表示
-                                with st.expander("📋 対象のQ&Aペア", expanded=False):
-                                    st.write(f"**質問:** {reason_row.get('user_question', 'N/A')}")
-                                    st.write(f"**回答:** {reason_row.get('bot_answer', 'N/A')}")
+                                    # Q&Aペアを表示
+                                    with st.expander("📋 対象のQ&Aペア", expanded=False):
+                                        user_question = str(reason_row.get('user_question', 'N/A')).strip()
+                                        bot_answer = str(reason_row.get('bot_answer', 'N/A')).strip()
+                                        st.write(f"**質問:** {user_question}")
+                                        st.write(f"**回答:** {bot_answer}")
 
-                                # フィードバック理由を安全に取得
-                                feedback_reason = reason_row.get('feedback_reason', '（理由なし）')
-                                if feedback_reason and str(feedback_reason).strip():
-                                    st.quote(feedback_reason)
-                                else:
-                                    st.write("*理由の記載なし*")
+                                    # フィードバック理由を安全に取得
+                                    try:
+                                        feedback_reason = reason_row.get('feedback_reason', '（理由なし）')
+                                        feedback_reason_str = str(feedback_reason).strip()
 
-                                # メタ情報の表示
-                                st.write(f"*使用スタイル: {reason_row.get('prompt_style', 'N/A')}, チャットID: {reason_row.get('chat_id', 'N/A')}*")
+                                        if feedback_reason_str and feedback_reason_str != 'nan' and feedback_reason_str != '（理由なし）' and len(feedback_reason_str) > 0:
+                                            st.quote(feedback_reason_str)
+                                        else:
+                                            st.write("*理由の記載なし*")
+                                    except Exception as quote_error:
+                                        # st.quote()でエラーが発生した場合の代替表示
+                                        st.write(f"**理由:** {str(feedback_reason)}")
+                                        if st.secrets.get("DEBUG_MODE", False):
+                                            st.warning(f"引用表示エラー: {quote_error}")
 
-                                st.divider()
+                                    # メタ情報の表示
+                                    prompt_style = str(reason_row.get('prompt_style', 'N/A')).strip()
+                                    chat_id = str(reason_row.get('chat_id', 'N/A')).strip()
+                                    st.write(f"*使用スタイル: {prompt_style}, チャットID: {chat_id}*")
+
+                                    st.divider()
+
+                                except Exception as row_error:
+                                    # 個別行の表示でエラーが発生した場合
+                                    st.error(f"フィードバックの表示中にエラーが発生しました")
+                                    if st.secrets.get("DEBUG_MODE", False):
+                                        st.warning(f"行表示エラー: {row_error}")
+                                    continue
         else:
             st.info("不満足のフィードバックはありません。")
 

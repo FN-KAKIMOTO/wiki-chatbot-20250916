@@ -679,19 +679,42 @@ class FeedbackManager:
 
             # 不満足理由の有無
             if 'feedback_reason' in df.columns:
-                # feedback_reason列を安全に文字列として処理
-                df_safe = df.copy()
-                df_safe['feedback_reason'] = df_safe['feedback_reason'].astype(str)
+                try:
+                    # feedback_reason列を安全に文字列として処理
+                    df_safe = df.copy()
 
-                reasons_provided = len(df_safe[
-                    (df_safe['satisfaction'] == '不満足') &
-                    (df_safe['feedback_reason'].notna()) &
-                    (df_safe['feedback_reason'] != 'nan') &
-                    (df_safe['feedback_reason'].str.strip() != '') &
-                    (df_safe['feedback_reason'].str.strip() != '（理由なし）')
-                ])
-                summary['dissatisfied_with_reason'] = reasons_provided
-                summary['dissatisfied_without_reason'] = dissatisfied - reasons_provided
+                    # NaN値を先に空文字列に置換
+                    df_safe['feedback_reason'] = df_safe['feedback_reason'].fillna('')
+
+                    # 文字列型に変換
+                    df_safe['feedback_reason'] = df_safe['feedback_reason'].astype(str)
+
+                    # 意味のあるフィードバックを持つ不満足回答をカウント
+                    def has_meaningful_reason(reason):
+                        if pd.isna(reason):
+                            return False
+                        str_reason = str(reason).strip()
+                        return (
+                            str_reason != '' and
+                            str_reason != 'nan' and
+                            str_reason != '（理由なし）' and
+                            len(str_reason) > 0
+                        )
+
+                    dissatisfied_with_reason = df_safe[
+                        (df_safe['satisfaction'] == '不満足') &
+                        df_safe['feedback_reason'].apply(has_meaningful_reason)
+                    ]
+
+                    reasons_provided = len(dissatisfied_with_reason)
+                    summary['dissatisfied_with_reason'] = reasons_provided
+                    summary['dissatisfied_without_reason'] = dissatisfied - reasons_provided
+                except Exception as e:
+                    # エラー時はフィードバック理由の統計を無効にする
+                    if st.secrets.get("DEBUG_MODE", False):
+                        st.warning(f"フィードバック理由の統計処理でエラー: {e}")
+                    summary['dissatisfied_with_reason'] = 0
+                    summary['dissatisfied_without_reason'] = dissatisfied
 
             return summary
 
@@ -736,17 +759,32 @@ class FeedbackManager:
 
             reasons = []
             for _, row in dissatisfied_df.iterrows():
-                reasons.append({
-                    "timestamp": row["timestamp"],
-                    "product_name": row["product_name"],
-                    "session_id": row["session_id"],
-                    "chat_id": row["chat_id"],
-                    "message_sequence": row["message_sequence"],
-                    "user_question": row["user_message"][:100] + ("..." if len(row["user_message"]) > 100 else ""),
-                    "bot_answer": row["bot_response"][:100] + ("..." if len(row["bot_response"]) > 100 else ""),
-                    "feedback_reason": str(row.get("feedback_reason", "")).strip() or "（理由なし）",
-                    "prompt_style": row.get("prompt_style", "")
-                })
+                try:
+                    # 各フィールドを安全に取得
+                    user_message = str(row.get("user_message", "N/A"))
+                    bot_response = str(row.get("bot_response", "N/A"))
+                    feedback_reason = str(row.get("feedback_reason", "")).strip()
+
+                    # 空の場合のデフォルト値
+                    if not feedback_reason or feedback_reason == 'nan':
+                        feedback_reason = "（理由なし）"
+
+                    reasons.append({
+                        "timestamp": str(row.get("timestamp", "")),
+                        "product_name": str(row.get("product_name", "")),
+                        "session_id": str(row.get("session_id", "")),
+                        "chat_id": str(row.get("chat_id", "")),
+                        "message_sequence": int(row.get("message_sequence", 0)) if pd.notna(row.get("message_sequence")) else 0,
+                        "user_question": user_message[:100] + ("..." if len(user_message) > 100 else ""),
+                        "bot_answer": bot_response[:100] + ("..." if len(bot_response) > 100 else ""),
+                        "feedback_reason": feedback_reason,
+                        "prompt_style": str(row.get("prompt_style", ""))
+                    })
+                except Exception as row_error:
+                    # 個別行の処理でエラーが発生した場合はスキップ
+                    if st.secrets.get("DEBUG_MODE", False):
+                        st.warning(f"行の処理でエラー: {row_error}")
+                    continue
             return reasons
 
         except Exception as e:
