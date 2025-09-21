@@ -312,10 +312,16 @@ def show_chat_analytics():
 
                 # フィードバック理由の要約
                 if 'feedback_reason' in reasons_df.columns:
-                    reasons_with_text = reasons_df[
-                        (reasons_df['feedback_reason'].notna()) &
-                        (reasons_df['feedback_reason'].str.strip() != '') &
-                        (reasons_df['feedback_reason'].str.strip() != '（理由未記録）')
+                    # feedback_reason列を安全に文字列として処理
+                    reasons_df_safe = reasons_df.copy()
+                    reasons_df_safe['feedback_reason'] = reasons_df_safe['feedback_reason'].astype(str)
+
+                    reasons_with_text = reasons_df_safe[
+                        (reasons_df_safe['feedback_reason'].notna()) &
+                        (reasons_df_safe['feedback_reason'] != 'nan') &
+                        (reasons_df_safe['feedback_reason'].str.strip() != '') &
+                        (reasons_df_safe['feedback_reason'].str.strip() != '（理由未記録）') &
+                        (reasons_df_safe['feedback_reason'].str.strip() != '（理由なし）')
                     ]
 
                     if len(reasons_with_text) > 0:

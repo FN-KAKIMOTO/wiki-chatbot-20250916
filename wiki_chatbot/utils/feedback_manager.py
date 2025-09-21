@@ -679,10 +679,16 @@ class FeedbackManager:
 
             # 不満足理由の有無
             if 'feedback_reason' in df.columns:
-                reasons_provided = len(df[
-                    (df['satisfaction'] == '不満足') &
-                    (df['feedback_reason'].notna()) &
-                    (df['feedback_reason'].str.strip() != '')
+                # feedback_reason列を安全に文字列として処理
+                df_safe = df.copy()
+                df_safe['feedback_reason'] = df_safe['feedback_reason'].astype(str)
+
+                reasons_provided = len(df_safe[
+                    (df_safe['satisfaction'] == '不満足') &
+                    (df_safe['feedback_reason'].notna()) &
+                    (df_safe['feedback_reason'] != 'nan') &
+                    (df_safe['feedback_reason'].str.strip() != '') &
+                    (df_safe['feedback_reason'].str.strip() != '（理由なし）')
                 ])
                 summary['dissatisfied_with_reason'] = reasons_provided
                 summary['dissatisfied_without_reason'] = dissatisfied - reasons_provided
@@ -738,7 +744,7 @@ class FeedbackManager:
                     "message_sequence": row["message_sequence"],
                     "user_question": row["user_message"][:100] + ("..." if len(row["user_message"]) > 100 else ""),
                     "bot_answer": row["bot_response"][:100] + ("..." if len(row["bot_response"]) > 100 else ""),
-                    "feedback_reason": row.get("feedback_reason", "") or "（理由なし）",
+                    "feedback_reason": str(row.get("feedback_reason", "")).strip() or "（理由なし）",
                     "prompt_style": row.get("prompt_style", "")
                 })
             return reasons
