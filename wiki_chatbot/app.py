@@ -118,6 +118,14 @@ def main() -> None:
                 else:
                     st.sidebar.warning("⚠️ データ同期に失敗しました")
 
+        # 時刻ベース定期バックアップのチェック（アプリ起動時）
+        try:
+            from utils.feedback_manager import feedback_manager
+            feedback_manager._check_scheduled_backup()
+        except Exception as e:
+            if st.secrets.get("DEBUG_MODE", False):
+                st.warning(f"定期バックアップチェックエラー: {e}")
+
         # 定期バックアップの設定（セッション開始時のみ）
         _setup_periodic_backup(github_sync)
 

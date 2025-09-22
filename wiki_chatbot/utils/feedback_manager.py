@@ -161,6 +161,14 @@ class FeedbackManager:
         self.backup_interval = st.secrets.get("BACKUP_INTERVAL_MESSAGES", 5)  # メッセージ5件ごと
         self.message_count_since_backup = 0
 
+        # 時刻ベースバックアップ設定（1日3回: 9時、15時、21時）
+        scheduled_hours_str = st.secrets.get("SCHEDULED_BACKUP_HOURS", "9,15,21")
+        try:
+            self.scheduled_backup_hours = [int(h.strip()) for h in scheduled_hours_str.split(",")]
+        except:
+            self.scheduled_backup_hours = [9, 15, 21]  # デフォルト値
+        self.last_scheduled_backup_date = None
+
     def _initialize_csv_files(self):
         """CSVファイルのヘッダーを初期化"""
 
@@ -230,8 +238,37 @@ class FeedbackManager:
         """チャットIDを生成（session_id + sequence番号）"""
         return f"{session_id}_msg_{sequence:03d}"
 
+    def _check_scheduled_backup(self):
+        """時刻ベース定期バックアップのチェック（1日3回）"""
+        if not self.auto_backup_enabled or not self.github_sync:
+            return
+
+        now = datetime.now()
+        current_date = now.date()
+        current_hour = now.hour
+
+        # 今日まだバックアップしていない場合
+        if self.last_scheduled_backup_date != current_date:
+            # 設定時刻に達している場合
+            if current_hour in self.scheduled_backup_hours:
+                try:
+                    success = self.github_sync.upload_data(f"Scheduled backup ({current_hour}:00) - {now.isoformat()}")
+                    if success:
+                        self.last_scheduled_backup_date = current_date
+                        if st.secrets.get("DEBUG_MODE", False):
+                            st.success(f"✅ 定期バックアップ完了 ({current_hour}時)")
+                    else:
+                        if st.secrets.get("DEBUG_MODE", False):
+                            st.warning(f"⚠️ 定期バックアップ失敗 ({current_hour}時)")
+                except Exception as e:
+                    if st.secrets.get("DEBUG_MODE", False):
+                        st.error(f"❌ 定期バックアップエラー: {e}")
+
     def _trigger_auto_backup(self, action: str = "Auto backup"):
         """自動バックアップをトリガーする"""
+        # まず時刻ベースバックアップをチェック
+        self._check_scheduled_backup()
+
         if not self.auto_backup_enabled or not self.github_sync:
             return
 
