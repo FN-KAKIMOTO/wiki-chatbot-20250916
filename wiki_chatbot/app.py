@@ -6,9 +6,13 @@
 """
 # --- 最初の数行に置く（streamlit run される一番最初のスクリプトで）---
 import sys
-import pysqlite3
-sys.modules["sqlite3"] = pysqlite3
-sys.modules["sqlite3.dbapi2"] = pysqlite3
+try:
+    import pysqlite3
+    sys.modules["sqlite3"] = pysqlite3
+    sys.modules["sqlite3.dbapi2"] = pysqlite3
+except ImportError:
+    # pysqlite3がない場合は標準のsqlite3を使用
+    import sqlite3
 
 # 以降は普段どおり
 import os

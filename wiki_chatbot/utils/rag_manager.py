@@ -19,16 +19,50 @@ class RAGManager:
         self.chroma_dir = os.path.join(data_dir, "chroma_db")
         os.makedirs(self.chroma_dir, exist_ok=True)
 
-        self.client = chromadb.PersistentClient(path=self.chroma_dir)
+        # ChromaDBクライアントの初期化
+        self.client = None
+        self.chroma_available = False
+
+        try:
+            self.client = chromadb.PersistentClient(path=self.chroma_dir)
+            self.chroma_available = True
+        except Exception as chroma_error:
+            # データベース破損の場合、自動復旧
+            if "no such table: databases" in str(chroma_error):
+                st.warning("🔄 ChromaDBデータベースを再初期化しています...")
+                import shutil
+                if os.path.exists(self.chroma_dir):
+                    shutil.rmtree(self.chroma_dir)
+                os.makedirs(self.chroma_dir, exist_ok=True)
+
+                try:
+                    self.client = chromadb.PersistentClient(path=self.chroma_dir)
+                    self.chroma_available = True
+                    st.success("✅ ChromaDB データベースが正常に再初期化されました")
+                except Exception:
+                    st.error("⚠️ ChromaDB再初期化に失敗: RAG機能は無効になります")
+                    self.client = None
+                    self.chroma_available = False
+            else:
+                st.error("⚠️ ChromaDB初期化エラー: RAG機能は無効になります")
+                self.client = None
+                self.chroma_available = False
+
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 
+        # 埋め込みモデルの初期化
         try:
             self.embeddings = OpenAIEmbeddings()
         except Exception as e:
             st.warning("OpenAI API key not set. Using default embeddings.")
             self.embeddings = None
 
+
+
     def get_or_create_collection(self, product_name: str):
+        if not self.chroma_available:
+            return None
+
         collection_name = f"product_{product_name.lower().replace(' ', '_')}"
         try:
             collection = self.client.get_collection(name=collection_name)
@@ -115,8 +149,15 @@ class RAGManager:
 
     def add_csv_as_qa_pairs(self, product_name: str, file_name: str, file_content: bytes) -> bool:
         """CSVファイルの各行を個別のQ&Aペアとして処理"""
+        if not self.chroma_available:
+            st.error("❌ ChromaDB が利用できないため、ファイルを追加できません")
+            return False
+
         try:
             collection = self.get_or_create_collection(product_name)
+            if collection is None:
+                return False
+
             file_hash = self.get_file_hash(file_content)
 
             temp_file_path = os.path.join(self.data_dir, f"temp_{file_hash}.csv")
@@ -224,8 +265,15 @@ class RAGManager:
             return False
 
     def add_document(self, product_name: str, file_name: str, file_content: bytes, file_type: str) -> bool:
+        if not self.chroma_available:
+            st.error("❌ ChromaDB が利用できないため、ファイルを追加できません")
+            return False
+
         try:
             collection = self.get_or_create_collection(product_name)
+            if collection is None:
+                return False
+
             file_hash = self.get_file_hash(file_content)
 
             temp_file_path = os.path.join(self.data_dir, f"temp_{file_hash}.{file_type}")
@@ -255,8 +303,14 @@ class RAGManager:
             return False
 
     def remove_document(self, product_name: str, file_name: str) -> bool:
+        if not self.chroma_available:
+            st.error("❌ ChromaDB が利用できないため、ファイルを削除できません")
+            return False
+
         try:
             collection = self.get_or_create_collection(product_name)
+            if collection is None:
+                return False
 
             results = collection.get(where={"file_name": file_name})
 
@@ -270,8 +324,13 @@ class RAGManager:
             return False
 
     def search(self, product_name: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        if not self.chroma_available:
+            return []
+
         try:
             collection = self.get_or_create_collection(product_name)
+            if collection is None:
+                return []
 
             results = collection.query(query_texts=[query], n_results=top_k)
 
@@ -357,8 +416,13 @@ class RAGManager:
             return []
 
     def list_documents(self, product_name: str) -> List[str]:
+        if not self.chroma_available:
+            return []
+
         try:
             collection = self.get_or_create_collection(product_name)
+            if collection is None:
+                return []
             results = collection.get()
 
             if results and results["metadatas"]:
@@ -374,6 +438,9 @@ class RAGManager:
             return []
 
     def list_products(self) -> List[str]:
+        if not self.chroma_available:
+            return []
+
         try:
             collections = self.client.list_collections()
             products = []

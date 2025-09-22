@@ -72,6 +72,7 @@ class GitHubDataSync:
             logger.setLevel(logging.INFO)
         return logger
 
+
     def _run_git_command(self, command: list, cwd: str) -> bool:
         """
         Git コマンド実行
