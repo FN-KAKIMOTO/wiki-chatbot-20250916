@@ -22,6 +22,16 @@ class RAGManager:
         self.chroma_dir = os.path.join(data_dir, "chroma_db")
         os.makedirs(self.chroma_dir, exist_ok=True)
 
+        # テキスト分割器の初期化（最初に実行）
+        self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+
+        # 埋め込みモデルの初期化
+        try:
+            self.embeddings = OpenAIEmbeddings()
+        except Exception as e:
+            st.warning("OpenAI API key not set. Using default embeddings.")
+            self.embeddings = None
+
         # ChromaDBクライアントの初期化（シングルトンパターン）
         self.client = None
         self.chroma_available = False
@@ -43,6 +53,17 @@ class RAGManager:
                     RAGManager._chroma_client = None
                 except Exception:
                     pass
+
+            # ディレクトリの権限を確実に設定
+            try:
+                os.chmod(self.chroma_dir, 0o755)
+                for root, dirs, files in os.walk(self.chroma_dir):
+                    for d in dirs:
+                        os.chmod(os.path.join(root, d), 0o755)
+                    for f in files:
+                        os.chmod(os.path.join(root, f), 0o644)
+            except Exception:
+                pass  # 権限設定に失敗しても続行
 
             # ChromaDB設定（readonly対策）
             settings = Settings(
@@ -94,15 +115,6 @@ class RAGManager:
                 st.error("RAG機能は無効になります")
                 self.client = None
                 self.chroma_available = False
-
-        self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-
-        # 埋め込みモデルの初期化
-        try:
-            self.embeddings = OpenAIEmbeddings()
-        except Exception as e:
-            st.warning("OpenAI API key not set. Using default embeddings.")
-            self.embeddings = None
 
 
 
@@ -375,11 +387,25 @@ class RAGManager:
                         if reference_data:
                             metadata["reference"] = reference_data
 
-                        collection.add(
-                            documents=[qa_text],  # 参照データはRAG処理に含めない
-                            metadatas=[metadata],
-                            ids=[doc_id],
-                        )
+                        try:
+                            collection.add(
+                                documents=[qa_text],  # 参照データはRAG処理に含めない
+                                metadatas=[metadata],
+                                ids=[doc_id],
+                            )
+                        except Exception as add_error:
+                            if "readonly database" in str(add_error) or "database is locked" in str(add_error):
+                                st.warning("🔄 データベースエラー、再初期化して再試行...")
+                                self._reinitialize_chroma()
+                                collection = self.get_or_create_collection(product_name)
+                                if collection:
+                                    collection.add(
+                                        documents=[qa_text],
+                                        metadatas=[metadata],
+                                        ids=[doc_id],
+                                    )
+                            else:
+                                raise add_error
                         qa_count += 1
 
                 os.remove(temp_file_path)
@@ -451,13 +477,29 @@ class RAGManager:
 
                 for i, chunk in enumerate(chunks):
                     doc_id = f"{file_hash}_{i}"
-                    collection.add(
-                        documents=[chunk],
-                        metadatas=[
-                            {"file_name": file_name, "file_hash": file_hash, "chunk_index": i, "product": product_name}
-                        ],
-                        ids=[doc_id],
-                    )
+                    try:
+                        collection.add(
+                            documents=[chunk],
+                            metadatas=[
+                                {"file_name": file_name, "file_hash": file_hash, "chunk_index": i, "product": product_name}
+                            ],
+                            ids=[doc_id],
+                        )
+                    except Exception as add_error:
+                        if "readonly database" in str(add_error) or "database is locked" in str(add_error):
+                            st.warning("🔄 データベースエラー、再初期化して再試行...")
+                            self._reinitialize_chroma()
+                            collection = self.get_or_create_collection(product_name)
+                            if collection:
+                                collection.add(
+                                    documents=[chunk],
+                                    metadatas=[
+                                        {"file_name": file_name, "file_hash": file_hash, "chunk_index": i, "product": product_name}
+                                    ],
+                                    ids=[doc_id],
+                                )
+                        else:
+                            raise add_error
 
                 if st.secrets.get("DEBUG_MODE", False):
                     st.success(f"✅ {len(chunks)}個のチャンクをChromeDBに追加完了")
@@ -485,8 +527,21 @@ class RAGManager:
             results = collection.get(where={"file_name": file_name})
 
             if results and results["ids"]:
-                collection.delete(ids=results["ids"])
-                return True
+                try:
+                    collection.delete(ids=results["ids"])
+                    return True
+                except Exception as delete_error:
+                    if "readonly database" in str(delete_error) or "database is locked" in str(delete_error):
+                        st.warning("🔄 データベースエラー、再初期化して再試行...")
+                        self._reinitialize_chroma()
+                        collection = self.get_or_create_collection(product_name)
+                        if collection:
+                            results = collection.get(where={"file_name": file_name})
+                            if results and results["ids"]:
+                                collection.delete(ids=results["ids"])
+                                return True
+                    else:
+                        raise delete_error
             return False
 
         except Exception as e:
