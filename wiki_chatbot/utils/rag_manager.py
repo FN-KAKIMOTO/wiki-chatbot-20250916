@@ -24,19 +24,38 @@ class RAGManager:
         self.chroma_available = False
 
         try:
-            self.client = chromadb.PersistentClient(path=self.chroma_dir)
+            # ChromaDB設定（readonly対策）
+            settings = Settings(
+                allow_reset=True,
+                anonymized_telemetry=False
+            )
+            self.client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
             self.chroma_available = True
         except Exception as chroma_error:
-            # データベース破損の場合、自動復旧
-            if "no such table: databases" in str(chroma_error):
+            error_msg = str(chroma_error)
+
+            # readonly database エラーまたはデータベース破損の場合、自動復旧
+            if ("readonly database" in error_msg or
+                "no such table: databases" in error_msg or
+                "database is locked" in error_msg):
                 st.warning("🔄 ChromaDBデータベースを再初期化しています...")
                 import shutil
                 if os.path.exists(self.chroma_dir):
                     shutil.rmtree(self.chroma_dir)
                 os.makedirs(self.chroma_dir, exist_ok=True)
 
+                # ディレクトリの権限を確実に設定
                 try:
-                    self.client = chromadb.PersistentClient(path=self.chroma_dir)
+                    os.chmod(self.chroma_dir, 0o755)
+                except Exception:
+                    pass
+
+                try:
+                    settings = Settings(
+                        allow_reset=True,
+                        anonymized_telemetry=False
+                    )
+                    self.client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
                     self.chroma_available = True
                     st.success("✅ ChromaDB データベースが正常に再初期化されました")
                 except Exception:
@@ -44,7 +63,8 @@ class RAGManager:
                     self.client = None
                     self.chroma_available = False
             else:
-                st.error("⚠️ ChromaDB初期化エラー: RAG機能は無効になります")
+                st.error(f"⚠️ ChromaDB初期化エラー: {error_msg}")
+                st.error("RAG機能は無効になります")
                 self.client = None
                 self.chroma_available = False
 
@@ -70,16 +90,70 @@ class RAGManager:
             if st.secrets.get("DEBUG_MODE", False):
                 st.success(f"✅ 既存コレクション取得: {collection_name}")
         except Exception as get_error:
+            get_error_msg = str(get_error)
+
+            # readonly エラーの場合は再初期化を試行
+            if "readonly database" in get_error_msg or "database is locked" in get_error_msg:
+                st.warning("🔄 データベースアクセスエラー、再初期化を試行...")
+                self._reinitialize_chroma()
+                if not self.chroma_available:
+                    return None
+
             try:
                 collection = self.client.create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
                 if st.secrets.get("DEBUG_MODE", False):
                     st.success(f"✅ 新規コレクション作成: {collection_name}")
             except Exception as create_error:
-                st.error(f"❌ コレクション作成失敗: {collection_name}")
-                st.error(f"取得エラー: {get_error}")
-                st.error(f"作成エラー: {create_error}")
-                return None
+                create_error_msg = str(create_error)
+
+                # readonly エラーの場合は再初期化を試行
+                if "readonly database" in create_error_msg or "database is locked" in create_error_msg:
+                    st.warning("🔄 コレクション作成でアクセスエラー、再初期化を試行...")
+                    self._reinitialize_chroma()
+                    if not self.chroma_available:
+                        return None
+
+                    # 再初期化後に再試行
+                    try:
+                        collection = self.client.create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
+                        if st.secrets.get("DEBUG_MODE", False):
+                            st.success(f"✅ 再初期化後コレクション作成成功: {collection_name}")
+                    except Exception:
+                        st.error(f"❌ 再初期化後もコレクション作成失敗: {collection_name}")
+                        return None
+                else:
+                    st.error(f"❌ コレクション作成失敗: {collection_name}")
+                    st.error(f"取得エラー: {get_error}")
+                    st.error(f"作成エラー: {create_error}")
+                    return None
+
         return collection
+
+    def _reinitialize_chroma(self):
+        """ChromaDBの再初期化"""
+        try:
+            import shutil
+            if os.path.exists(self.chroma_dir):
+                shutil.rmtree(self.chroma_dir)
+            os.makedirs(self.chroma_dir, exist_ok=True)
+
+            # ディレクトリの権限を設定
+            try:
+                os.chmod(self.chroma_dir, 0o755)
+            except Exception:
+                pass
+
+            settings = Settings(
+                allow_reset=True,
+                anonymized_telemetry=False
+            )
+            self.client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
+            self.chroma_available = True
+            st.info("✅ ChromaDB再初期化完了")
+        except Exception as e:
+            st.error(f"❌ ChromaDB再初期化失敗: {e}")
+            self.client = None
+            self.chroma_available = False
 
     def get_file_hash(self, file_content: bytes) -> str:
         return hashlib.md5(file_content).hexdigest()

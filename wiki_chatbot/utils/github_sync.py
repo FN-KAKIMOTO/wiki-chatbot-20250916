@@ -86,6 +86,30 @@ class GitHubDataSync:
         except Exception:
             return False
 
+    def _fix_file_permissions(self, directory: Path):
+        """ディレクトリ内のファイル権限を修正（readonly対策）"""
+        try:
+            for root, dirs, files in os.walk(directory):
+                # ディレクトリの権限設定
+                for dir_name in dirs:
+                    dir_path = os.path.join(root, dir_name)
+                    try:
+                        os.chmod(dir_path, 0o755)
+                    except Exception:
+                        pass
+
+                # ファイルの権限設定
+                for file_name in files:
+                    file_path = os.path.join(root, file_name)
+                    try:
+                        os.chmod(file_path, 0o644)
+                    except Exception:
+                        pass
+
+            self.logger.info("File permissions fixed for downloaded data")
+        except Exception as e:
+            self.logger.warning(f"Failed to fix file permissions: {e}")
+
 
     def _push_with_retry(self, cwd: str, max_retries: int = 3) -> bool:
         """Git push with conflict resolution and retries"""
@@ -205,6 +229,9 @@ class GitHubDataSync:
                         self.local_data_dir,
                         dirs_exist_ok=True
                     )
+
+                    # コピーしたファイルの権限を適切に設定（readonly対策）
+                    self._fix_file_permissions(self.local_data_dir)
 
                     # ダウンロードしたChromeDBの整合性チェック
                     chroma_file = self.local_data_dir / "chroma_db" / "chroma.sqlite3"
