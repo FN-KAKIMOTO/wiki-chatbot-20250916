@@ -141,7 +141,8 @@ def main() -> None:
     # 各画面で遅延バックアップチェックを実行
     _check_delayed_backup_global()
 
-        # 定期バックアップの設定（セッション開始時のみ）
+    # 定期バックアップの設定（セッション開始時のみ）
+    if github_sync:
         _setup_periodic_backup(github_sync)
 
     # 認証チェック
