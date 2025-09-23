@@ -73,6 +73,19 @@ class GitHubDataSync:
             logger.setLevel(logging.INFO)
         return logger
 
+    def _is_git_lfs_available(self) -> bool:
+        """Git LFSが利用可能かチェック"""
+        try:
+            result = subprocess.run(
+                ["git", "lfs", "version"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
 
     def _push_with_retry(self, cwd: str, max_retries: int = 3) -> bool:
         """Git push with conflict resolution and retries"""
@@ -162,13 +175,16 @@ class GitHubDataSync:
             if not clone_success:
                 return False
 
-            # Git LFS ファイル取得
-            lfs_success = self._run_git_command([
-                "git", "lfs", "pull"
-            ], self.temp_dir)
+            # Git LFS ファイル取得（利用可能な場合のみ）
+            if self._is_git_lfs_available():
+                lfs_success = self._run_git_command([
+                    "git", "lfs", "pull"
+                ], self.temp_dir)
 
-            if not lfs_success:
-                self.logger.warning("LFS pull failed, continuing...")
+                if not lfs_success:
+                    self.logger.warning("LFS pull failed, continuing...")
+            else:
+                self.logger.info("Git LFS not available, skipping LFS pull")
 
             # データディレクトリ確保
             self.local_data_dir.mkdir(exist_ok=True)
@@ -285,23 +301,8 @@ class GitHubDataSync:
             for cmd in config_commands:
                 self._run_git_command(cmd, self.temp_dir)
 
-            # Git LFS 設定確認と初期化
-            lfs_init_commands = [
-                ["git", "lfs", "install"],
-                ["git", "lfs", "track", "*.db"],
-                ["git", "lfs", "track", "*.sqlite3"],
-                ["git", "lfs", "track", "*.sqlite"]
-            ]
-
-            for cmd in lfs_init_commands:
-                lfs_success = self._run_git_command(cmd, self.temp_dir)
-                if not lfs_success:
-                    self.logger.warning(f"LFS command failed: {' '.join(cmd)}")
-
-            # .gitattributes ファイルを追加
-            gitattributes_path = Path(self.temp_dir) / ".gitattributes"
-            if gitattributes_path.exists():
-                self._run_git_command(["git", "add", ".gitattributes"], self.temp_dir)
+            # Git LFS 設定は既存のリポジトリ設定を使用（初期化はスキップ）
+            self.logger.info("Using existing Git LFS configuration from repository")
 
             # ファイル追加・コミット（競合対応版）
             git_commands = [
