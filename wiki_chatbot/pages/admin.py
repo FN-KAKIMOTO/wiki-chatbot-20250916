@@ -94,6 +94,14 @@ def main():
     if not SessionManager.check_authentication():
         if not SessionManager.authenticate_user():
             return
+
+    # 遅延バックアップのチェック（Admin画面でも実行）
+    try:
+        from utils.feedback_manager import feedback_manager
+        feedback_manager._check_delayed_backup()
+    except Exception as e:
+        if st.secrets.get("DEBUG_MODE", False):
+            st.warning(f"遅延バックアップチェックエラー: {e}")
     st.set_page_config(page_title="管理画面 - Wiki Chatbot", page_icon="🛠️", layout="wide")
 
     # サイドバーの構築

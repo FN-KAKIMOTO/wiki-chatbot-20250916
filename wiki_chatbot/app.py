@@ -128,6 +128,19 @@ def main() -> None:
             if st.secrets.get("DEBUG_MODE", False):
                 st.warning(f"定期バックアップチェックエラー: {e}")
 
+    # 全画面共通：遅延バックアップチェック
+    def _check_delayed_backup_global():
+        """全画面で実行される遅延バックアップチェック"""
+        try:
+            from utils.feedback_manager import feedback_manager
+            feedback_manager._check_delayed_backup()
+        except Exception as e:
+            if st.secrets.get("DEBUG_MODE", False):
+                st.sidebar.warning(f"バックアップチェックエラー: {e}")
+
+    # 各画面で遅延バックアップチェックを実行
+    _check_delayed_backup_global()
+
         # 定期バックアップの設定（セッション開始時のみ）
         _setup_periodic_backup(github_sync)
 

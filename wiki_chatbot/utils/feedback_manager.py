@@ -312,6 +312,10 @@ class FeedbackManager:
         st.session_state.pending_backup_action = action
         st.session_state.pending_backup_time = datetime.now().timestamp() + delay_seconds
 
+        # ユーザーへの通知
+        if st.secrets.get("DEBUG_MODE", False):
+            st.info(f"⏰ {delay_seconds}秒後にバックアップ実行予定: {action}")
+
     def _check_delayed_backup(self):
         """遅延バックアップの実行チェック"""
         if not hasattr(st.session_state, 'pending_backup_time'):

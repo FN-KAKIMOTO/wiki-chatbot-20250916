@@ -84,6 +84,21 @@ class RAGManager:
     def get_file_hash(self, file_content: bytes) -> str:
         return hashlib.md5(file_content).hexdigest()
 
+    def _is_duplicate_file(self, product_name: str, file_hash: str) -> bool:
+        """ファイルハッシュによる重複チェック"""
+        if not self.chroma_available:
+            return False
+
+        try:
+            collection = self.get_or_create_collection(product_name)
+            if collection is None:
+                return False
+
+            results = collection.get(where={"file_hash": file_hash})
+            return bool(results and results["ids"])
+        except Exception:
+            return False
+
     def extract_text_from_file(self, file_path: str, file_type: str) -> str:
         try:
             if file_type == "txt":
@@ -172,6 +187,11 @@ class RAGManager:
                 return False
 
             file_hash = self.get_file_hash(file_content)
+
+            # 重複チェック
+            if self._is_duplicate_file(product_name, file_hash):
+                st.warning(f"⚠️ CSVファイル「{file_name}」は既に追加されています（重複スキップ）")
+                return True
 
             temp_file_path = os.path.join(self.data_dir, f"temp_{file_hash}.csv")
             with open(temp_file_path, "wb") as f:
@@ -274,7 +294,10 @@ class RAGManager:
                 return False
 
         except Exception as e:
-            st.error(f"CSV処理エラー: {str(e)}")
+            # エラー時も一時ファイルをクリーンアップ
+            if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            st.error(f"❌ CSV処理エラー: {str(e)}")
             return False
 
     def add_document(self, product_name: str, file_name: str, file_content: bytes, file_type: str) -> bool:
@@ -290,6 +313,11 @@ class RAGManager:
                 return False
 
             file_hash = self.get_file_hash(file_content)
+
+            # 重複チェック
+            if self._is_duplicate_file(product_name, file_hash):
+                st.warning(f"⚠️ ファイル「{file_name}」は既に追加されています（重複スキップ）")
+                return True
 
             temp_file_path = os.path.join(self.data_dir, f"temp_{file_hash}.{file_type}")
             with open(temp_file_path, "wb") as f:
@@ -320,11 +348,17 @@ class RAGManager:
                         ids=[doc_id],
                     )
 
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.success(f"✅ {len(chunks)}個のチャンクをChromeDBに追加完了")
+
             os.remove(temp_file_path)
             return True
 
         except Exception as e:
-            st.error(f"Error adding document: {e}")
+            # エラー時も一時ファイルをクリーンアップ
+            if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            st.error(f"❌ ドキュメント追加エラー: {e}")
             return False
 
     def remove_document(self, product_name: str, file_name: str) -> bool:

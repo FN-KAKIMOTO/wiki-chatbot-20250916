@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import tempfile
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -84,8 +85,8 @@ class GitHubDataSync:
 
             self.logger.warning(f"Push attempt {attempt + 1} failed, trying pull and merge...")
 
-            # Pull latest changes
-            pull_success = self._run_git_command(["git", "pull", "origin", self.branch, "--no-edit"], cwd)
+            # Pull latest changes with strategy
+            pull_success = self._run_git_command(["git", "pull", "origin", self.branch, "--no-edit", "--strategy=recursive", "-X", "ours"], cwd)
             if not pull_success:
                 self.logger.error(f"Pull failed on attempt {attempt + 1}")
                 continue
@@ -172,16 +173,41 @@ class GitHubDataSync:
             # データディレクトリ確保
             self.local_data_dir.mkdir(exist_ok=True)
 
-            # データファイルコピー
+            # データファイルコピー（安全性向上）
             source_data = Path(self.temp_dir) / "data"
             if source_data.exists():
-                shutil.copytree(
-                    source_data,
-                    self.local_data_dir,
-                    dirs_exist_ok=True
-                )
-                self.logger.info("Data download completed")
-                return True
+                try:
+                    # 既存データのバックアップ
+                    if self.local_data_dir.exists() and any(self.local_data_dir.iterdir()):
+                        backup_dir = self.local_data_dir.parent / f"data_backup_{int(time.time())}"
+                        shutil.move(str(self.local_data_dir), str(backup_dir))
+                        self.logger.info(f"Existing data backed up to: {backup_dir}")
+
+                    # 新しいデータをコピー
+                    shutil.copytree(
+                        source_data,
+                        self.local_data_dir,
+                        dirs_exist_ok=True
+                    )
+
+                    # ダウンロードしたChromeDBの整合性チェック
+                    chroma_file = self.local_data_dir / "chroma_db" / "chroma.sqlite3"
+                    if chroma_file.exists():
+                        import sqlite3
+                        try:
+                            conn = sqlite3.connect(str(chroma_file), timeout=5.0)
+                            conn.execute("SELECT COUNT(*) FROM sqlite_master")
+                            conn.close()
+                            self.logger.info("Downloaded ChromaDB integrity check passed")
+                        except Exception as db_error:
+                            self.logger.error(f"Downloaded ChromaDB is corrupted: {db_error}")
+                            return False
+
+                    self.logger.info("Data download completed")
+                    return True
+                except Exception as copy_error:
+                    self.logger.error(f"Data copy during download failed: {copy_error}")
+                    return False
             else:
                 self.logger.info("No existing data found, starting fresh")
                 return True
@@ -221,13 +247,34 @@ class GitHubDataSync:
             if not clone_success:
                 return False
 
-            # データディレクトリコピー
+            # データディレクトリコピー（安全性向上）
             dest_data = Path(self.temp_dir) / "data"
-            if dest_data.exists():
-                shutil.rmtree(dest_data)
+            try:
+                if dest_data.exists():
+                    shutil.rmtree(dest_data)
 
-            if self.local_data_dir.exists():
-                shutil.copytree(self.local_data_dir, dest_data)
+                if self.local_data_dir.exists():
+                    # ChromaDBファイルの整合性確認
+                    chroma_file = self.local_data_dir / "chroma_db" / "chroma.sqlite3"
+                    if chroma_file.exists():
+                        import sqlite3
+                        try:
+                            # データベースの簡単な整合性チェック
+                            conn = sqlite3.connect(str(chroma_file), timeout=5.0)
+                            conn.execute("SELECT COUNT(*) FROM sqlite_master")
+                            conn.close()
+                            self.logger.info("ChromaDB integrity check passed")
+                        except Exception as db_error:
+                            self.logger.warning(f"ChromaDB integrity check failed: {db_error}")
+
+                    shutil.copytree(self.local_data_dir, dest_data)
+                    self.logger.info(f"Data copied successfully: {len(list(dest_data.rglob('*')))} files")
+                else:
+                    self.logger.warning("Local data directory does not exist")
+                    return False
+            except Exception as copy_error:
+                self.logger.error(f"Data copy failed: {copy_error}")
+                return False
 
             # Git 設定
             config_commands = [
@@ -237,6 +284,24 @@ class GitHubDataSync:
 
             for cmd in config_commands:
                 self._run_git_command(cmd, self.temp_dir)
+
+            # Git LFS 設定確認と初期化
+            lfs_init_commands = [
+                ["git", "lfs", "install"],
+                ["git", "lfs", "track", "*.db"],
+                ["git", "lfs", "track", "*.sqlite3"],
+                ["git", "lfs", "track", "*.sqlite"]
+            ]
+
+            for cmd in lfs_init_commands:
+                lfs_success = self._run_git_command(cmd, self.temp_dir)
+                if not lfs_success:
+                    self.logger.warning(f"LFS command failed: {' '.join(cmd)}")
+
+            # .gitattributes ファイルを追加
+            gitattributes_path = Path(self.temp_dir) / ".gitattributes"
+            if gitattributes_path.exists():
+                self._run_git_command(["git", "add", ".gitattributes"], self.temp_dir)
 
             # ファイル追加・コミット（競合対応版）
             git_commands = [
@@ -301,13 +366,28 @@ class GitHubDataSync:
         chroma_db = self.local_data_dir / "chroma_db" / "chroma.sqlite3"
         sqlite_db = self.local_data_dir / "chatbot.db"
 
+        # ChromaDBの整合性チェック
+        chroma_integrity = False
+        if chroma_db.exists():
+            try:
+                import sqlite3
+                conn = sqlite3.connect(str(chroma_db), timeout=5.0)
+                conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='databases'")
+                result = conn.fetchone()
+                chroma_integrity = result and result[0] > 0
+                conn.close()
+            except Exception:
+                chroma_integrity = False
+
         return {
             "chroma_db_exists": chroma_db.exists(),
             "sqlite_db_exists": sqlite_db.exists(),
             "chroma_db_size": chroma_db.stat().st_size if chroma_db.exists() else 0,
             "sqlite_db_size": sqlite_db.stat().st_size if sqlite_db.exists() else 0,
+            "chroma_db_integrity": chroma_integrity,
             "last_modified": {
                 "chroma_db": datetime.fromtimestamp(chroma_db.stat().st_mtime).isoformat() if chroma_db.exists() else None,
                 "sqlite_db": datetime.fromtimestamp(sqlite_db.stat().st_mtime).isoformat() if sqlite_db.exists() else None
-            }
+            },
+            "sync_status": "healthy" if chroma_db.exists() and sqlite_db.exists() and chroma_integrity else "needs_attention"
         }
