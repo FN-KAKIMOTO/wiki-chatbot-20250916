@@ -61,13 +61,24 @@ class RAGManager:
 
     def get_or_create_collection(self, product_name: str):
         if not self.chroma_available:
+            st.error("❌ ChromaDB が利用できません")
             return None
 
         collection_name = f"product_{product_name.lower().replace(' ', '_')}"
         try:
             collection = self.client.get_collection(name=collection_name)
-        except:
-            collection = self.client.create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
+            if st.secrets.get("DEBUG_MODE", False):
+                st.success(f"✅ 既存コレクション取得: {collection_name}")
+        except Exception as get_error:
+            try:
+                collection = self.client.create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.success(f"✅ 新規コレクション作成: {collection_name}")
+            except Exception as create_error:
+                st.error(f"❌ コレクション作成失敗: {collection_name}")
+                st.error(f"取得エラー: {get_error}")
+                st.error(f"作成エラー: {create_error}")
+                return None
         return collection
 
     def get_file_hash(self, file_content: bytes) -> str:
@@ -151,11 +162,13 @@ class RAGManager:
         """CSVファイルの各行を個別のQ&Aペアとして処理"""
         if not self.chroma_available:
             st.error("❌ ChromaDB が利用できないため、ファイルを追加できません")
+            st.error("💡 アプリを再起動してください")
             return False
 
         try:
             collection = self.get_or_create_collection(product_name)
             if collection is None:
+                st.error(f"❌ 商材「{product_name}」のコレクション作成に失敗しました")
                 return False
 
             file_hash = self.get_file_hash(file_content)
@@ -267,11 +280,13 @@ class RAGManager:
     def add_document(self, product_name: str, file_name: str, file_content: bytes, file_type: str) -> bool:
         if not self.chroma_available:
             st.error("❌ ChromaDB が利用できないため、ファイルを追加できません")
+            st.error("💡 アプリを再起動してください")
             return False
 
         try:
             collection = self.get_or_create_collection(product_name)
             if collection is None:
+                st.error(f"❌ 商材「{product_name}」のコレクション作成に失敗しました")
                 return False
 
             file_hash = self.get_file_hash(file_content)
@@ -282,8 +297,18 @@ class RAGManager:
 
             text_content = self.extract_text_from_file(temp_file_path, file_type)
 
+            if not text_content or not text_content.strip():
+                st.error(f"❌ ファイル「{file_name}」からテキストを抽出できませんでした")
+                os.remove(temp_file_path)
+                return False
+
             if text_content:
                 chunks = self.text_splitter.split_text(text_content)
+
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.info(f"📄 ファイル処理: {file_name}")
+                    st.info(f"📊 テキスト長: {len(text_content)}文字")
+                    st.info(f"🧩 チャンク数: {len(chunks)}個")
 
                 for i, chunk in enumerate(chunks):
                     doc_id = f"{file_hash}_{i}"

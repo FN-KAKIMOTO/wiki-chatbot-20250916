@@ -122,6 +122,8 @@ def main() -> None:
         try:
             from utils.feedback_manager import feedback_manager
             feedback_manager._check_scheduled_backup()
+            # 遅延バックアップのチェック（複数ファイル処理対応）
+            feedback_manager._check_delayed_backup()
         except Exception as e:
             if st.secrets.get("DEBUG_MODE", False):
                 st.warning(f"定期バックアップチェックエラー: {e}")

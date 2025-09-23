@@ -73,6 +73,32 @@ class GitHubDataSync:
         return logger
 
 
+    def _push_with_retry(self, cwd: str, max_retries: int = 3) -> bool:
+        """Git push with conflict resolution and retries"""
+        for attempt in range(max_retries):
+            # Try normal push
+            success = self._run_git_command(["git", "push", "origin", self.branch], cwd)
+            if success:
+                self.logger.info(f"Push successful on attempt {attempt + 1}")
+                return True
+
+            self.logger.warning(f"Push attempt {attempt + 1} failed, trying pull and merge...")
+
+            # Pull latest changes
+            pull_success = self._run_git_command(["git", "pull", "origin", self.branch, "--no-edit"], cwd)
+            if not pull_success:
+                self.logger.error(f"Pull failed on attempt {attempt + 1}")
+                continue
+
+            # Try push again after pull
+            push_success = self._run_git_command(["git", "push", "origin", self.branch], cwd)
+            if push_success:
+                self.logger.info(f"Push successful after pull on attempt {attempt + 1}")
+                return True
+
+        self.logger.error("Push failed after all retries")
+        return False
+
     def _run_git_command(self, command: list, cwd: str) -> bool:
         """
         Git コマンド実行
@@ -212,11 +238,10 @@ class GitHubDataSync:
             for cmd in config_commands:
                 self._run_git_command(cmd, self.temp_dir)
 
-            # ファイル追加・コミット
+            # ファイル追加・コミット（競合対応版）
             git_commands = [
                 ["git", "add", "."],
-                ["git", "commit", "-m", commit_message],
-                ["git", "push", "origin", self.branch]
+                ["git", "commit", "-m", commit_message]
             ]
 
             for cmd in git_commands:
@@ -226,6 +251,12 @@ class GitHubDataSync:
                     return True
                 elif not success:
                     return False
+
+            # Push with conflict resolution
+            push_success = self._push_with_retry(self.temp_dir)
+            if not push_success:
+                self.logger.error("Push failed after retries")
+                return False
 
             self.logger.info("Data upload completed")
             return True

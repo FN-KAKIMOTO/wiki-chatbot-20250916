@@ -302,6 +302,29 @@ class FeedbackManager:
             if st.secrets.get("DEBUG_MODE", False):
                 st.error(f"❌ 強制バックアップエラー: {e}")
 
+    def _schedule_delayed_backup(self, action: str = "Delayed backup", delay_seconds: int = 10):
+        """遅延バックアップをスケジュール（複数ファイル処理時の重複回避）"""
+        if not hasattr(st.session_state, 'pending_backup_action'):
+            st.session_state.pending_backup_action = action
+            st.session_state.pending_backup_time = datetime.now().timestamp() + delay_seconds
+
+        # 既存のアクションを更新（最後の操作を記録）
+        st.session_state.pending_backup_action = action
+        st.session_state.pending_backup_time = datetime.now().timestamp() + delay_seconds
+
+    def _check_delayed_backup(self):
+        """遅延バックアップの実行チェック"""
+        if not hasattr(st.session_state, 'pending_backup_time'):
+            return
+
+        if datetime.now().timestamp() >= st.session_state.pending_backup_time:
+            action = getattr(st.session_state, 'pending_backup_action', 'Delayed backup')
+            self._force_backup(action)
+
+            # 処理済みフラグをクリア
+            delattr(st.session_state, 'pending_backup_time')
+            delattr(st.session_state, 'pending_backup_action')
+
     def save_chat_message(
         self, product_name: str, user_message: str, bot_response: str, sources_used: List[str], prompt_style: str, user_name: str = ""
     ):

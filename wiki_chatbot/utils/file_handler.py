@@ -152,8 +152,8 @@ class FileHandler:
 
                                 if success:
                                     st.success(f"✅ {uploaded_file.name} が追加されました")
-                                    # ファイル追加時に強制バックアップ
-                                    feedback_manager._force_backup(f"File added: {uploaded_file.name}")
+                                    # ファイル追加時に遅延バックアップをスケジュール（複数ファイル対応）
+                                    feedback_manager._schedule_delayed_backup(f"File added: {uploaded_file.name}", delay_seconds=15)
                                 else:
                                     st.error(f"❌ {uploaded_file.name} の追加に失敗しました")
                 else:
