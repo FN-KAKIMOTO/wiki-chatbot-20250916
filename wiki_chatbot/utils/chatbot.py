@@ -11,7 +11,7 @@ from utils.rag_manager import RAGManager
 from utils.enhanced_rag_manager import enhanced_rag_manager
 from utils.llm_manager import llm_manager
 from utils.prompt_manager import prompt_manager
-from utils.feedback_manager import feedback_manager
+from utils.simple_feedback_manager import simple_feedback_manager
 
 
 class WikiChatbot:
@@ -350,7 +350,7 @@ class WikiChatbot:
 
             # チャット履歴を保存
             user_name = self._get_current_user_info()
-            feedback_manager.save_chat_message(
+            simple_feedback_manager.save_chat_message(
                 product_name=product_name,
                 user_message=prompt,
                 bot_response=response,
@@ -363,7 +363,7 @@ class WikiChatbot:
         current_prompt_style = st.session_state.get(
             f"prompt_style_{product_name}", settings.get_default_prompt_style()
         )
-        feedback_manager.show_satisfaction_survey(product_name, current_prompt_style)
+        simple_feedback_manager.show_satisfaction_survey(product_name, current_prompt_style)
 
     def product_selection_interface(self):
         st.title("🏢 社内Wiki検索チャットボット")
@@ -411,7 +411,7 @@ class WikiChatbot:
             st.caption("🔗 会話の記憶機能により、前の質問を踏まえた追加質問が可能です")
 
             # フィードバック統計の表示
-            feedback_summary = feedback_manager.get_feedback_summary(product_name)
+            feedback_summary = simple_feedback_manager.get_feedback_summary(product_name)
             if feedback_summary and feedback_summary.get("total_sessions", 0) > 0:
                 with st.expander("📊 過去のフィードバック統計", expanded=False):
                     col1, col2, col3 = st.columns(3)

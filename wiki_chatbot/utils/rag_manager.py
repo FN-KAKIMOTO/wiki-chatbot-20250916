@@ -10,7 +10,6 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_openai import OpenAIEmbeddings
 from docx import Document
 import streamlit as st
-from config.settings import get_current_rag_config
 
 
 class RAGManager:

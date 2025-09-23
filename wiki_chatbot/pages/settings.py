@@ -529,7 +529,7 @@ def main():
     st.title("⚙️ システム設定")
 
     # タブで設定項目を分割
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🤖 LLM設定", "🔍 RAG設定", "💬 プロンプト", "⚙️ システム", "🔑 API Keys"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🤖 LLM設定", "🔍 RAG設定", "💬 プロンプト", "⚙️ システム", "🔑 API Keys", "💾 永続化"])
 
     with tab1:
         show_llm_settings()
@@ -545,6 +545,9 @@ def main():
 
     with tab5:
         show_api_keys_setup()
+
+    with tab6:
+        show_persistence_settings()
 
     # 設定検証
     st.divider()
@@ -563,6 +566,76 @@ def main():
 
         if not issues["errors"] and not issues["warnings"]:
             st.success("✅ すべての設定が正常です!")
+
+
+def show_persistence_settings():
+    """永続化設定"""
+    st.subheader("💾 データ永続化")
+
+    # 現在の永続化システム状況
+    st.write("### 現在の永続化システム")
+
+    # GitHub設定の状況確認
+    github_configured = st.secrets.get("GITHUB_REPO_URL") and st.secrets.get("GITHUB_TOKEN")
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        if github_configured:
+            st.success("✅ **GitHub永続化**: 設定済み・有効")
+            st.write("- 自動バックアップ機能")
+            st.write("- 起動時データ復元")
+            st.write("- 手動バックアップ・復元")
+        else:
+            st.warning("⚠️ **GitHub永続化**: 未設定")
+            st.write("API KeysタブでGitHub設定を完了してください")
+
+    with col2:
+        if github_configured:
+            try:
+                from utils.github_sync import GitHubDataSync
+                from config.github_settings import GitHubConfig
+                config = GitHubConfig.get_config()
+                github_sync = GitHubDataSync(
+                    repo_url=config["repo_url"],
+                    token=config["token"]
+                )
+                sync_status = github_sync.get_sync_status()
+                if sync_status["sync_status"] == "healthy":
+                    st.success("🔄 同期状態: 正常")
+                else:
+                    st.warning("🔄 同期状態: 要確認")
+            except Exception:
+                st.error("🔄 同期状態: エラー")
+
+    st.divider()
+
+    # シンプル永続化オプション
+    st.write("### シンプル永続化（ZIPファイル）")
+    st.info("GitHub設定が難しい場合の代替手段として、手動でのZIPファイルバックアップ・復元が利用できます")
+
+    try:
+        from utils.simple_persistence import simple_persistence
+        simple_persistence.combined_interface()
+    except Exception as e:
+        st.error(f"シンプル永続化機能の読み込みエラー: {e}")
+
+    st.divider()
+
+    # 永続化方法の比較
+    st.write("### 永続化方法の比較")
+
+    comparison_data = {
+        "機能": ["GitHub永続化", "ZIPファイル"],
+        "自動化": ["✅ 自動バックアップ", "❌ 手動操作のみ"],
+        "復元": ["✅ 起動時自動復元", "❌ 手動アップロード"],
+        "設定難易度": ["⚠️ 中（GitHub設定必要）", "✅ 簡単"],
+        "容量制限": ["✅ 実質無制限", "⚠️ ブラウザ制限あり"],
+        "推奨用途": ["本格運用", "テスト・バックアップ"]
+    }
+
+    import pandas as pd
+    df = pd.DataFrame(comparison_data)
+    st.table(df)
 
 
 if __name__ == "__main__":

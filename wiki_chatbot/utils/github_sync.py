@@ -111,31 +111,9 @@ class GitHubDataSync:
             self.logger.warning(f"Failed to fix file permissions: {e}")
 
 
-    def _push_with_retry(self, cwd: str, max_retries: int = 3) -> bool:
-        """Git push with conflict resolution and retries"""
-        for attempt in range(max_retries):
-            # Try normal push to main
-            success = self._run_git_command(["git", "push", "origin", "main"], cwd)
-            if success:
-                self.logger.info(f"Push successful on attempt {attempt + 1}")
-                return True
-
-            self.logger.warning(f"Push attempt {attempt + 1} failed, trying pull and merge...")
-
-            # Pull latest changes from main with strategy
-            pull_success = self._run_git_command(["git", "pull", "origin", "main", "--no-edit", "--strategy=recursive", "-X", "ours"], cwd)
-            if not pull_success:
-                self.logger.error(f"Pull failed on attempt {attempt + 1}")
-                continue
-
-            # Try push again after pull
-            push_success = self._run_git_command(["git", "push", "origin", "main"], cwd)
-            if push_success:
-                self.logger.info(f"Push successful after pull on attempt {attempt + 1}")
-                return True
-
-        self.logger.error("Push failed after all retries")
-        return False
+    def _simple_push(self, cwd: str) -> bool:
+        """シンプルなGit push"""
+        return self._run_git_command(["git", "push", "origin", "main"], cwd)
 
     def _run_git_command(self, command: list, cwd: str) -> bool:
         """
@@ -150,11 +128,19 @@ class GitHubDataSync:
         """
         try:
             # GitHub トークンを含む認証URL作成
-            if self.token and "clone" in command and len(command) > 2:
+            if self.token and "clone" in command:
                 auth_url = self.repo_url.replace(
                     "https://", f"https://{self.token}@"
                 )
-                command[2] = auth_url
+                # cloneコマンドでURLを置換（位置を正しく特定）
+                for i, arg in enumerate(command):
+                    if self.repo_url in arg:
+                        command[i] = auth_url
+                        break
+
+            # デバッグ: コマンド構造を確認（認証情報は隠す）
+            debug_command = [arg.replace(f"https://{self.token}@", "https://***@") if self.token and self.token in arg else arg for arg in command]
+            self.logger.info(f"Executing git command: {' '.join(debug_command)}")
 
             result = subprocess.run(
                 command,
@@ -217,35 +203,11 @@ class GitHubDataSync:
             source_data = Path(self.temp_dir) / "data"
             if source_data.exists():
                 try:
-                    # 既存データのバックアップ
-                    if self.local_data_dir.exists() and any(self.local_data_dir.iterdir()):
-                        backup_dir = self.local_data_dir.parent / f"data_backup_{int(time.time())}"
-                        shutil.move(str(self.local_data_dir), str(backup_dir))
-                        self.logger.info(f"Existing data backed up to: {backup_dir}")
+                    # 既存データを削除して新しいデータをコピー
+                    if self.local_data_dir.exists():
+                        shutil.rmtree(self.local_data_dir)
 
-                    # 新しいデータをコピー
-                    shutil.copytree(
-                        source_data,
-                        self.local_data_dir,
-                        dirs_exist_ok=True
-                    )
-
-                    # コピーしたファイルの権限を適切に設定（readonly対策）
-                    self._fix_file_permissions(self.local_data_dir)
-
-                    # ダウンロードしたChromeDBの整合性チェック
-                    chroma_file = self.local_data_dir / "chroma_db" / "chroma.sqlite3"
-                    if chroma_file.exists():
-                        import sqlite3
-                        try:
-                            conn = sqlite3.connect(str(chroma_file), timeout=5.0)
-                            conn.execute("SELECT COUNT(*) FROM sqlite_master")
-                            conn.close()
-                            self.logger.info("Downloaded ChromaDB integrity check passed")
-                        except Exception as db_error:
-                            self.logger.error(f"Downloaded ChromaDB is corrupted: {db_error}")
-                            return False
-
+                    shutil.copytree(source_data, self.local_data_dir)
                     self.logger.info("Data download completed")
                     return True
                 except Exception as copy_error:
@@ -290,33 +252,17 @@ class GitHubDataSync:
             if not clone_success:
                 return False
 
-            # データディレクトリコピー（安全性向上）
+            # データディレクトリコピー
             dest_data = Path(self.temp_dir) / "data"
-            try:
-                if dest_data.exists():
-                    shutil.rmtree(dest_data)
 
-                if self.local_data_dir.exists():
-                    # ChromaDBファイルの整合性確認
-                    chroma_file = self.local_data_dir / "chroma_db" / "chroma.sqlite3"
-                    if chroma_file.exists():
-                        import sqlite3
-                        try:
-                            # データベースの簡単な整合性チェック
-                            conn = sqlite3.connect(str(chroma_file), timeout=5.0)
-                            conn.execute("SELECT COUNT(*) FROM sqlite_master")
-                            conn.close()
-                            self.logger.info("ChromaDB integrity check passed")
-                        except Exception as db_error:
-                            self.logger.warning(f"ChromaDB integrity check failed: {db_error}")
+            if dest_data.exists():
+                shutil.rmtree(dest_data)
 
-                    shutil.copytree(self.local_data_dir, dest_data)
-                    self.logger.info(f"Data copied successfully: {len(list(dest_data.rglob('*')))} files")
-                else:
-                    self.logger.warning("Local data directory does not exist")
-                    return False
-            except Exception as copy_error:
-                self.logger.error(f"Data copy failed: {copy_error}")
+            if self.local_data_dir.exists():
+                shutil.copytree(self.local_data_dir, dest_data)
+                self.logger.info("Data copied successfully")
+            else:
+                self.logger.warning("Local data directory does not exist")
                 return False
 
             # Git 設定
@@ -345,10 +291,10 @@ class GitHubDataSync:
                 elif not success:
                     return False
 
-            # Push with conflict resolution
-            push_success = self._push_with_retry(self.temp_dir)
+            # Push to GitHub
+            push_success = self._simple_push(self.temp_dir)
             if not push_success:
-                self.logger.error("Push failed after retries")
+                self.logger.error("Push failed")
                 return False
 
             self.logger.info("Data upload completed")

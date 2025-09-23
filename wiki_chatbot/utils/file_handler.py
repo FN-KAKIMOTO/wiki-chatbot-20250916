@@ -5,7 +5,7 @@ import pandas as pd
 import io
 from typing import List, Dict, Any
 from .rag_manager import RAGManager
-from .feedback_manager import feedback_manager
+from .simple_feedback_manager import simple_feedback_manager
 
 
 class FileHandler:
@@ -152,8 +152,8 @@ class FileHandler:
 
                                 if success:
                                     st.success(f"✅ {uploaded_file.name} が追加されました")
-                                    # ファイル追加時に遅延バックアップをスケジュール（複数ファイル対応）
-                                    feedback_manager._schedule_delayed_backup(f"File added: {uploaded_file.name}", delay_seconds=15)
+                                    # ファイル追加時の自動バックアップ
+                                    simple_feedback_manager.trigger_file_backup()
                                 else:
                                     st.error(f"❌ {uploaded_file.name} の追加に失敗しました")
                 else:

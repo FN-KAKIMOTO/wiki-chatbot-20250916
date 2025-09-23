@@ -289,18 +289,18 @@ class FeedbackManager:
                 if st.secrets.get("DEBUG_MODE", False):
                     st.error(f"❌ 自動バックアップエラー: {e}")
 
-    def _force_backup(self, action: str = "Force backup"):
-        """強制バックアップを実行する（ファイルアップロード時など）"""
+    def _simple_backup(self, action: str = "Backup"):
+        """シンプルなバックアップ実行"""
         if not self.github_sync:
             return
 
         try:
-            success = self.github_sync.upload_data(f"{action} - {datetime.now().isoformat()}")
+            success = self.github_sync.upload_data(action)
             if success and st.secrets.get("DEBUG_MODE", False):
-                st.success(f"✅ 強制バックアップ完了 ({action})")
+                st.success("✅ バックアップ完了")
         except Exception as e:
             if st.secrets.get("DEBUG_MODE", False):
-                st.error(f"❌ 強制バックアップエラー: {e}")
+                st.error(f"❌ バックアップエラー: {e}")
 
     def _schedule_delayed_backup(self, action: str = "Delayed backup", delay_seconds: int = 10):
         """遅延バックアップをスケジュール（複数ファイル処理時の重複回避）"""
