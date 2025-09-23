@@ -14,30 +14,58 @@ from config.settings import get_current_rag_config
 
 
 class RAGManager:
+    _chroma_client = None
+    _chroma_settings = None
+    _chroma_dir = None
+
     def __init__(self, data_dir: str = "data"):
         self.data_dir = data_dir
         self.chroma_dir = os.path.join(data_dir, "chroma_db")
         os.makedirs(self.chroma_dir, exist_ok=True)
 
-        # ChromaDBクライアントの初期化
+        # ChromaDBクライアントの初期化（シングルトンパターン）
         self.client = None
         self.chroma_available = False
 
+        # クラス変数として同じ設定を共有
+        if RAGManager._chroma_dir != self.chroma_dir or RAGManager._chroma_client is None:
+            self._initialize_chroma_client()
+        else:
+            # 既存のクライアントを再利用
+            self.client = RAGManager._chroma_client
+            self.chroma_available = self.client is not None
+
+    def _initialize_chroma_client(self):
+        """ChromaDBクライアントの初期化"""
         try:
+            # 既存のクライアントがある場合はリセット
+            if RAGManager._chroma_client is not None:
+                try:
+                    RAGManager._chroma_client = None
+                except Exception:
+                    pass
+
             # ChromaDB設定（readonly対策）
             settings = Settings(
                 allow_reset=True,
                 anonymized_telemetry=False
             )
-            self.client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
+
+            RAGManager._chroma_settings = settings
+            RAGManager._chroma_dir = self.chroma_dir
+            RAGManager._chroma_client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
+
+            self.client = RAGManager._chroma_client
             self.chroma_available = True
         except Exception as chroma_error:
             error_msg = str(chroma_error)
 
-            # readonly database エラーまたはデータベース破損の場合、自動復旧
+            # 各種エラーに対応した自動復旧
             if ("readonly database" in error_msg or
                 "no such table: databases" in error_msg or
-                "database is locked" in error_msg):
+                "database is locked" in error_msg or
+                "already exists" in error_msg or
+                "different settings" in error_msg):
                 st.warning("🔄 ChromaDBデータベースを再初期化しています...")
                 import shutil
                 if os.path.exists(self.chroma_dir):
@@ -132,6 +160,9 @@ class RAGManager:
     def _reinitialize_chroma(self):
         """ChromaDBの再初期化"""
         try:
+            # 既存のクライアントをクリア
+            RAGManager._chroma_client = None
+
             import shutil
             if os.path.exists(self.chroma_dir):
                 shutil.rmtree(self.chroma_dir)
@@ -143,15 +174,22 @@ class RAGManager:
             except Exception:
                 pass
 
+            # 新しいクライアントを作成
             settings = Settings(
                 allow_reset=True,
                 anonymized_telemetry=False
             )
-            self.client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
+
+            RAGManager._chroma_settings = settings
+            RAGManager._chroma_dir = self.chroma_dir
+            RAGManager._chroma_client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
+
+            self.client = RAGManager._chroma_client
             self.chroma_available = True
             st.info("✅ ChromaDB再初期化完了")
         except Exception as e:
             st.error(f"❌ ChromaDB再初期化失敗: {e}")
+            RAGManager._chroma_client = None
             self.client = None
             self.chroma_available = False
 

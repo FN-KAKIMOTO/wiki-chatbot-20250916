@@ -114,22 +114,22 @@ class GitHubDataSync:
     def _push_with_retry(self, cwd: str, max_retries: int = 3) -> bool:
         """Git push with conflict resolution and retries"""
         for attempt in range(max_retries):
-            # Try normal push
-            success = self._run_git_command(["git", "push", "origin", self.branch], cwd)
+            # Try normal push to main
+            success = self._run_git_command(["git", "push", "origin", "main"], cwd)
             if success:
                 self.logger.info(f"Push successful on attempt {attempt + 1}")
                 return True
 
             self.logger.warning(f"Push attempt {attempt + 1} failed, trying pull and merge...")
 
-            # Pull latest changes with strategy
-            pull_success = self._run_git_command(["git", "pull", "origin", self.branch, "--no-edit", "--strategy=recursive", "-X", "ours"], cwd)
+            # Pull latest changes from main with strategy
+            pull_success = self._run_git_command(["git", "pull", "origin", "main", "--no-edit", "--strategy=recursive", "-X", "ours"], cwd)
             if not pull_success:
                 self.logger.error(f"Pull failed on attempt {attempt + 1}")
                 continue
 
             # Try push again after pull
-            push_success = self._run_git_command(["git", "push", "origin", self.branch], cwd)
+            push_success = self._run_git_command(["git", "push", "origin", "main"], cwd)
             if push_success:
                 self.logger.info(f"Push successful after pull on attempt {attempt + 1}")
                 return True
@@ -191,9 +191,9 @@ class GitHubDataSync:
             # 一時ディレクトリ作成
             self.temp_dir = tempfile.mkdtemp()
 
-            # リポジトリクローン
+            # mainブランチの最新状態をクローン
             clone_success = self._run_git_command([
-                "git", "clone", self.repo_url, self.temp_dir
+                "git", "clone", "-b", "main", self.repo_url, self.temp_dir
             ], ".")
 
             if not clone_success:
@@ -282,9 +282,9 @@ class GitHubDataSync:
             # 一時ディレクトリ作成
             self.temp_dir = tempfile.mkdtemp()
 
-            # リポジトリクローン
+            # mainブランチの最新状態をクローン
             clone_success = self._run_git_command([
-                "git", "clone", self.repo_url, self.temp_dir
+                "git", "clone", "-b", "main", self.repo_url, self.temp_dir
             ], ".")
 
             if not clone_success:
@@ -383,6 +383,7 @@ class GitHubDataSync:
 
         self.logger.info("Local data exists, skipping download")
         return True
+
 
     def get_sync_status(self) -> Dict[str, Any]:
         """
