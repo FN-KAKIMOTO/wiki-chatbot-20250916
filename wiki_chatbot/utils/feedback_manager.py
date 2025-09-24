@@ -323,7 +323,7 @@ class FeedbackManager:
 
         if datetime.now().timestamp() >= st.session_state.pending_backup_time:
             action = getattr(st.session_state, 'pending_backup_action', 'Delayed backup')
-            self._force_backup(action)
+            self._simple_backup(action)
 
             # 処理済みフラグをクリア
             delattr(st.session_state, 'pending_backup_time')
@@ -394,6 +394,10 @@ class FeedbackManager:
                      user_message: str, bot_response: str, prompt_style: str, feedback_reason: str = ""):
         """ユーザーフィードバックを保存（個別チャット単位）"""
 
+        # デバッグ情報
+        if st.secrets.get("DEBUG_MODE", False):
+            st.write(f"🔍 DEBUG: Saving feedback - {satisfaction}, chat_id: {chat_id}")
+
         try:
             session_id = self.get_session_id(product_name)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -430,7 +434,11 @@ class FeedbackManager:
                 ])
 
             # フィードバック保存時は即座にバックアップ（重要データのため）
-            self._force_backup("Feedback saved")
+            self._simple_backup("Feedback saved")
+
+            # デバッグ情報
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write(f"✅ DEBUG: Feedback saved successfully to CSV and triggered backup")
 
             return True
 

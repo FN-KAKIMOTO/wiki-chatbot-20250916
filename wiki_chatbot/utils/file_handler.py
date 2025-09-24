@@ -5,7 +5,7 @@ import pandas as pd
 import io
 from typing import List, Dict, Any
 from .rag_manager import RAGManager
-from .simple_feedback_manager import simple_feedback_manager
+from .feedback_manager import feedback_manager
 
 
 class FileHandler:
@@ -153,7 +153,7 @@ class FileHandler:
                                 if success:
                                     st.success(f"✅ {uploaded_file.name} が追加されました")
                                     # ファイル追加時の自動バックアップ
-                                    simple_feedback_manager.trigger_file_backup()
+                                    feedback_manager._trigger_auto_backup("File addition backup")
                                 else:
                                     st.error(f"❌ {uploaded_file.name} の追加に失敗しました")
                 else:
