@@ -366,3 +366,66 @@ class GitHubDataSync:
             },
             "sync_status": "healthy" if chroma_db.exists() and sqlite_db.exists() and chroma_integrity else "needs_attention"
         }
+
+    def diagnose_github_connection(self) -> Dict[str, Any]:
+        """GitHub接続診断"""
+        diagnosis = {
+            "config": {},
+            "connectivity": {},
+            "repository": {},
+            "permissions": {}
+        }
+
+        # 設定確認
+        diagnosis["config"]["repo_url"] = self.repo_url
+        diagnosis["config"]["token_exists"] = bool(self.token)
+        diagnosis["config"]["token_prefix"] = self.token[:10] + "..." if self.token else None
+        diagnosis["config"]["branch"] = self.branch
+
+        # 一時ディレクトリでテスト
+        import tempfile
+        temp_dir = tempfile.mkdtemp()
+
+        try:
+            # Git基本機能テスト
+            result = subprocess.run(["git", "--version"], capture_output=True, text=True)
+            diagnosis["connectivity"]["git_available"] = result.returncode == 0
+            diagnosis["connectivity"]["git_version"] = result.stdout.strip() if result.returncode == 0 else None
+
+            # Git LFS テスト
+            lfs_available = self._is_git_lfs_available()
+            diagnosis["connectivity"]["git_lfs_available"] = lfs_available
+
+            # リポジトリアクセステスト
+            clone_command = ["git", "clone", "--depth", "1", "-b", "main"]
+            if self.token:
+                auth_url = self.repo_url.replace("https://", f"https://{self.token}@")
+                clone_command.append(auth_url)
+            else:
+                clone_command.append(self.repo_url)
+            clone_command.append(temp_dir + "/test")
+
+            result = subprocess.run(clone_command, capture_output=True, text=True, timeout=30)
+            diagnosis["repository"]["clone_success"] = result.returncode == 0
+            diagnosis["repository"]["clone_error"] = result.stderr if result.returncode != 0 else None
+
+            if result.returncode == 0:
+                # リポジトリ内容確認
+                repo_path = temp_dir + "/test"
+                data_path = os.path.join(repo_path, "data")
+                diagnosis["repository"]["data_dir_exists"] = os.path.exists(data_path)
+
+                if os.path.exists(data_path):
+                    diagnosis["repository"]["data_contents"] = os.listdir(data_path)
+                else:
+                    diagnosis["repository"]["repo_contents"] = os.listdir(repo_path)
+
+        except Exception as e:
+            diagnosis["connectivity"]["test_error"] = str(e)
+        finally:
+            # クリーンアップ
+            if os.path.exists(temp_dir):
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+        return diagnosis
