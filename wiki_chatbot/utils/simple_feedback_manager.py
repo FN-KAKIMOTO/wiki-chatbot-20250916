@@ -235,8 +235,12 @@ class SimpleFeedbackManager:
         st.session_state[sequence_key] += 1
         return st.session_state[sequence_key]
 
-    def save_chat_message(self, *args, **kwargs):
+    def save_chat_message(self, product_name: str, user_message: str, bot_response: str,
+                         sources_used: List[str], prompt_style: str, user_name: str):
         """チャットメッセージ保存（メッセージ間隔バックアップをトリガー）"""
+        # メッセージ順序番号を更新
+        message_sequence = self.get_next_message_sequence(product_name)
+
         # メッセージ間隔での自動バックアップチェック
         self._check_auto_backup("message")
 
@@ -245,7 +249,16 @@ class SimpleFeedbackManager:
 
         # 最新のチャット情報を取得
         messages = st.session_state.get(f"messages_{product_name}", [])
+
+        # デバッグ情報表示
+        if st.secrets.get("DEBUG_MODE", False):
+            st.write(f"🔍 DEBUG: messages count = {len(messages)}")
+            if messages:
+                st.write(f"🔍 DEBUG: last message = {messages[-1]['role'] if messages else 'None'}")
+
         if len(messages) < 2:
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write("🔍 DEBUG: Not enough messages, skipping satisfaction survey")
             return  # まだチャットがない場合は表示しない
 
         # 最新のチャット交換を取得
@@ -261,16 +274,25 @@ class SimpleFeedbackManager:
                 break
 
         if not latest_user_msg or not latest_bot_msg:
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write(f"🔍 DEBUG: Missing Q&A pair - user_msg: {bool(latest_user_msg)}, bot_msg: {bool(latest_bot_msg)}")
             return  # 完全なQ&Aペアがない場合は表示しない
 
         # セッション情報を取得
         session_id = self.get_session_id(product_name)
-        message_sequence = st.session_state.get(f"message_sequence_{session_id}", 0)
+        # 現在のメッセージ順序番号を取得（新規追加はしない）
+        sequence_key = f"message_sequence_{session_id}"
+        message_sequence = st.session_state.get(sequence_key, 0)
         chat_id = self.generate_chat_id(session_id, message_sequence)
 
         # このチャットに対してフィードバック済みかチェック
         feedback_key = f"feedback_given_{chat_id}"
         dissatisfied_key = f"dissatisfied_selected_{chat_id}"
+
+        # デバッグ情報
+        if st.secrets.get("DEBUG_MODE", False):
+            st.write(f"🔍 DEBUG: chat_id = {chat_id}")
+            st.write(f"🔍 DEBUG: feedback_given = {st.session_state.get(feedback_key, False)}")
 
         # まだフィードバックを送信していない場合のみ表示
         if not st.session_state.get(feedback_key, False):
