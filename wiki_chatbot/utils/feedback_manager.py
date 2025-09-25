@@ -153,8 +153,12 @@ class FeedbackManager:
                     repo_url=config["repo_url"],
                     token=config["token"]
                 )
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.write("🔍 DEBUG: GitHub sync initialized successfully")
             except Exception as e:
                 st.warning(f"GitHub同期初期化エラー: {e}")
+        elif st.secrets.get("DEBUG_MODE", False):
+            st.write(f"🔍 DEBUG: GitHub sync not available - GITHUB_SYNC_AVAILABLE: {GITHUB_SYNC_AVAILABLE}, is_configured: {GitHubConfig.is_configured() if GITHUB_SYNC_AVAILABLE else 'N/A'}")
 
         # 自動バックアップの設定
         self.auto_backup_enabled = st.secrets.get("AUTO_BACKUP_ENABLED", True)
@@ -292,15 +296,22 @@ class FeedbackManager:
     def _simple_backup(self, action: str = "Backup"):
         """シンプルなバックアップ実行"""
         if not self.github_sync:
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write("🔍 DEBUG: GitHub sync not configured, skipping backup")
             return
 
+        if st.secrets.get("DEBUG_MODE", False):
+            st.write(f"🔍 DEBUG: Starting backup with action: {action}")
         try:
             success = self.github_sync.upload_data(action)
             if success and st.secrets.get("DEBUG_MODE", False):
                 st.success("✅ バックアップ完了")
+            elif not success and st.secrets.get("DEBUG_MODE", False):
+                st.warning("⚠️ バックアップ失敗")
         except Exception as e:
             if st.secrets.get("DEBUG_MODE", False):
                 st.error(f"❌ バックアップエラー: {e}")
+                st.write(f"🔍 DEBUG: Backup error details - {type(e).__name__}: {e}")
 
     def _schedule_delayed_backup(self, action: str = "Delayed backup", delay_seconds: int = 10):
         """遅延バックアップをスケジュール（複数ファイル処理時の重複回避）"""
@@ -396,7 +407,7 @@ class FeedbackManager:
 
         # デバッグ情報
         if st.secrets.get("DEBUG_MODE", False):
-            st.write(f"🔍 DEBUG: Saving feedback - {satisfaction}, chat_id: {chat_id}")
+            st.write(f"🔍 DEBUG: Attempting to save feedback - {satisfaction}, chat_id: {chat_id}")
 
         try:
             session_id = self.get_session_id(product_name)
@@ -418,6 +429,8 @@ class FeedbackManager:
                     st.warning(f"フィードバックDB保存エラー: {db_error}")
 
             # CSVに追記（新しい構造）
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write(f"🔍 DEBUG: Attempting to write to CSV file: {self.feedback_file}")
             with open(self.feedback_file, "a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow([
@@ -444,6 +457,8 @@ class FeedbackManager:
 
         except Exception as e:
             st.error(f"フィードバック保存エラー: {str(e)}")
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write(f"🔍 DEBUG: Error details - {type(e).__name__}: {e}")
             return False
 
     def export_chat_history(self, product_name: str = None) -> Optional[str]:
@@ -885,9 +900,16 @@ class FeedbackManager:
     def show_satisfaction_survey(self, product_name: str, prompt_style: str):
         """満足度調査UIを表示（個別チャット単位）"""
 
+        if st.secrets.get("DEBUG_MODE", False):
+            st.write(f"🔍 DEBUG: show_satisfaction_survey called for {product_name}")
+
         # 最新のチャット情報を取得
         messages = st.session_state.get(f"messages_{product_name}", [])
+        if st.secrets.get("DEBUG_MODE", False):
+            st.write(f"🔍 DEBUG: Found {len(messages)} messages")
         if len(messages) < 2:
+            if st.secrets.get("DEBUG_MODE", False):
+                st.write("🔍 DEBUG: Not enough messages, skipping survey")
             return  # まだチャットがない場合は表示しない
 
         # 最新のチャット交換を取得
@@ -907,12 +929,19 @@ class FeedbackManager:
 
         # セッション情報を取得
         session_id = self.get_session_id(product_name)
-        message_sequence = st.session_state.get(f"message_sequence_{session_id}", 0)
+        # 現在のメッセージ数に基づいてsequenceを計算（メッセージペア数）
+        message_sequence = len(messages) // 2  # user-assistantペアの数
         chat_id = self.generate_chat_id(session_id, message_sequence)
+
+        if st.secrets.get("DEBUG_MODE", False):
+            st.write(f"🔍 DEBUG: session_id: {session_id}, message_sequence: {message_sequence}, chat_id: {chat_id}")
 
         # このチャットに対してフィードバック済みかチェック
         feedback_key = f"feedback_given_{chat_id}"
         dissatisfied_key = f"dissatisfied_selected_{chat_id}"
+
+        if st.secrets.get("DEBUG_MODE", False):
+            st.write(f"🔍 DEBUG: feedback_key: {feedback_key}, already_given: {st.session_state.get(feedback_key, False)}")
 
         # まだフィードバックを送信していない場合のみ表示
         if not st.session_state.get(feedback_key, False):

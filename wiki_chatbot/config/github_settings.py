@@ -32,8 +32,8 @@ class GitHubConfig:
             設定辞書
         """
         return {
-            "enabled": st.secrets.get("GITHUB_SYNC_ENABLED", False),
-            "repo_url": st.secrets.get("GITHUB_DATA_REPO"),
+            "enabled": True,  # secrets.tomlにGitHub設定があれば有効とみなす
+            "repo_url": st.secrets.get("GITHUB_REPO_URL") or st.secrets.get("GITHUB_DATA_REPO"),
             "token": st.secrets.get("GITHUB_TOKEN"),
             "branch": "main",
             "auto_backup_interval": 30,  # 分
@@ -49,11 +49,8 @@ class GitHubConfig:
             設定が完了している場合True
         """
         config = GitHubConfig.get_config()
-        return all([
-            config["enabled"],
-            config["repo_url"],
-            config["token"]
-        ])
+        # repo_urlとtokenが両方設定されていれば有効
+        return bool(config["repo_url"]) and bool(config["token"])
 
     @staticmethod
     def get_display_config() -> Dict[str, str]:
