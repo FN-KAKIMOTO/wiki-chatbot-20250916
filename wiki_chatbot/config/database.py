@@ -56,6 +56,23 @@ class PersistentDatabase:
                 )
             """)
 
+            # 互換性のためのfeedbackテーブル（user_feedbackと同じ構造）
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    product_name TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    message_sequence INTEGER NOT NULL,
+                    satisfaction TEXT NOT NULL,
+                    user_message TEXT NOT NULL,
+                    bot_response TEXT NOT NULL,
+                    prompt_style TEXT NOT NULL,
+                    feedback_reason TEXT DEFAULT ''
+                )
+            """)
+
             # ファイル管理テーブル
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS file_management (
