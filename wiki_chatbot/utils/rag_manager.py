@@ -19,8 +19,30 @@ class RAGManager:
 
     def __init__(self, data_dir: str = "data"):
         self.data_dir = data_dir
+
+        # データディレクトリの確実な作成
+        try:
+            os.makedirs(data_dir, exist_ok=True)
+            # Streamlit Cloud環境での権限設定
+            try:
+                os.chmod(data_dir, 0o755)
+            except (OSError, PermissionError):
+                pass  # 権限変更できない場合は無視
+        except Exception as e:
+            st.warning(f"⚠️ データディレクトリ作成警告: {e}")
+
         self.chroma_dir = os.path.join(data_dir, "chroma_db")
-        os.makedirs(self.chroma_dir, exist_ok=True)
+
+        # ChromaDBディレクトリの確実な作成
+        try:
+            os.makedirs(self.chroma_dir, exist_ok=True)
+            # Streamlit Cloud環境での権限設定
+            try:
+                os.chmod(self.chroma_dir, 0o755)
+            except (OSError, PermissionError):
+                pass  # 権限変更できない場合は無視
+        except Exception as e:
+            st.warning(f"⚠️ ChromaDBディレクトリ作成警告: {e}")
 
         # テキスト分割器の初期化（最初に実行）
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
@@ -71,12 +93,30 @@ class RAGManager:
                 anonymized_telemetry=False
             )
 
+            if st.secrets.get("DEBUG_MODE", False):
+                st.info(f"🔧 ChromaDB初期化: {self.chroma_dir}")
+
             RAGManager._chroma_settings = settings
             RAGManager._chroma_dir = self.chroma_dir
-            RAGManager._chroma_client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
 
-            self.client = RAGManager._chroma_client
-            self.chroma_available = True
+            # Streamlit Cloud環境でのPersistentClient初期化
+            try:
+                RAGManager._chroma_client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
+                self.client = RAGManager._chroma_client
+                self.chroma_available = True
+                if st.secrets.get("DEBUG_MODE", False):
+                    st.success("✅ PersistentClient初期化成功")
+            except Exception as persistent_error:
+                # PersistentClientが失敗した場合はEphemeralClientを試行
+                st.warning(f"⚠️ PersistentClient初期化失敗: {persistent_error}")
+                st.info("🔄 EphemeralClientで代替...")
+                try:
+                    RAGManager._chroma_client = chromadb.EphemeralClient(settings=settings)
+                    self.client = RAGManager._chroma_client
+                    self.chroma_available = True
+                    st.info("✅ EphemeralClient初期化成功（セッション終了時にデータは消失）")
+                except Exception as ephemeral_error:
+                    raise Exception(f"PersistentClient: {persistent_error}, EphemeralClient: {ephemeral_error}")
         except Exception as chroma_error:
             error_msg = str(chroma_error)
 
@@ -103,9 +143,23 @@ class RAGManager:
                         allow_reset=True,
                         anonymized_telemetry=False
                     )
-                    self.client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
-                    self.chroma_available = True
-                    st.success("✅ ChromaDB データベースが正常に再初期化されました")
+                    # PersistentClientを試行
+                    try:
+                        self.client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
+                        self.chroma_available = True
+                        st.success("✅ ChromaDB データベースが正常に再初期化されました")
+                    except Exception as persistent_error:
+                        # PersistentClientが失敗した場合はEphemeralClientを試行
+                        st.warning(f"⚠️ PersistentClient再初期化失敗: {persistent_error}")
+                        st.info("🔄 EphemeralClientで代替...")
+                        try:
+                            self.client = chromadb.EphemeralClient(settings=settings)
+                            self.chroma_available = True
+                            st.info("✅ EphemeralClientで再初期化成功（セッション終了時にデータは消失）")
+                        except Exception as ephemeral_error:
+                            st.error(f"⚠️ 再初期化完全失敗: Persistent({persistent_error}), Ephemeral({ephemeral_error})")
+                            self.client = None
+                            self.chroma_available = False
                 except Exception:
                     st.error("⚠️ ChromaDB再初期化に失敗: RAG機能は無効になります")
                     self.client = None
@@ -193,11 +247,24 @@ class RAGManager:
 
             RAGManager._chroma_settings = settings
             RAGManager._chroma_dir = self.chroma_dir
-            RAGManager._chroma_client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
 
-            self.client = RAGManager._chroma_client
-            self.chroma_available = True
-            st.info("✅ ChromaDB再初期化完了")
+            # PersistentClientを試行
+            try:
+                RAGManager._chroma_client = chromadb.PersistentClient(path=self.chroma_dir, settings=settings)
+                self.client = RAGManager._chroma_client
+                self.chroma_available = True
+                st.info("✅ ChromaDB再初期化完了")
+            except Exception as persistent_error:
+                # PersistentClientが失敗した場合はEphemeralClientを試行
+                st.warning(f"⚠️ PersistentClient再初期化失敗: {persistent_error}")
+                st.info("🔄 EphemeralClientで代替...")
+                try:
+                    RAGManager._chroma_client = chromadb.EphemeralClient(settings=settings)
+                    self.client = RAGManager._chroma_client
+                    self.chroma_available = True
+                    st.info("✅ EphemeralClientで再初期化完了（セッション終了時にデータは消失）")
+                except Exception as ephemeral_error:
+                    raise Exception(f"PersistentClient: {persistent_error}, EphemeralClient: {ephemeral_error}")
         except Exception as e:
             st.error(f"❌ ChromaDB再初期化失敗: {e}")
             RAGManager._chroma_client = None

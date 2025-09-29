@@ -298,6 +298,7 @@ class FileHandler:
 
                     with col2:
                         # CSVファイルの場合は特別な処理オプションを提供
+                        csv_process_type = None  # デフォルト値を設定
                         if file_type == "csv":
                             csv_process_type = st.selectbox(
                                 "CSV処理方法:",
