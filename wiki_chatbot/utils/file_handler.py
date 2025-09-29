@@ -3,6 +3,9 @@ import tempfile
 import os
 import pandas as pd
 import io
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Any
 from .rag_manager import RAGManager
 from .feedback_manager import feedback_manager
@@ -26,6 +29,146 @@ class FileHandler:
     def is_supported_file(self, filename: str) -> bool:
         file_type = self.get_file_type(filename)
         return file_type in self.supported_extensions
+
+    def fetch_html_body(self, url: str) -> str:
+        """URLからHTMLを取得してbodyテキストを抽出"""
+        try:
+            # URLの正規化
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
+
+            # HTMLを取得
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+
+            # BeautifulSoupでHTMLを解析
+            soup = BeautifulSoup(response.content, 'html.parser')
+
+            # 不要な要素を削除
+            for element in soup.find_all(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+                element.decompose()
+
+            # bodyタグから本文を抽出
+            body = soup.find('body')
+            if body:
+                text = body.get_text(separator='\n', strip=True)
+            else:
+                text = soup.get_text(separator='\n', strip=True)
+
+            # 空白行を整理
+            lines = [line.strip() for line in text.split('\n') if line.strip()]
+            return '\n'.join(lines)
+
+        except requests.RequestException as e:
+            return f"URL取得エラー: {str(e)}"
+        except Exception as e:
+            return f"HTML解析エラー: {str(e)}"
+
+    def process_url_csv(self, product_name: str, csv_content: bytes) -> Dict[str, Any]:
+        """URLが記載されたCSVを処理してHTMLコンテンツをRAGに追加"""
+        try:
+            # CSVを読み込み
+            df = pd.read_csv(io.BytesIO(csv_content), encoding='utf-8')
+
+            # URLを含む列を特定
+            url_columns = []
+            for col in df.columns:
+                if any(keyword in col.lower() for keyword in ['url', 'link', 'リンク', 'ページ', 'サイト']):
+                    url_columns.append(col)
+
+            if not url_columns:
+                # URLっぽい値を含む列を自動検出
+                for col in df.columns:
+                    sample_values = df[col].dropna().astype(str).head(5)
+                    if any('http' in str(val) or '.' in str(val) for val in sample_values):
+                        url_columns.append(col)
+
+            if not url_columns:
+                return {"success": False, "error": "URL列が見つかりません"}
+
+            results = {
+                "success": True,
+                "processed_urls": 0,
+                "failed_urls": 0,
+                "error_details": []
+            }
+
+            # 各URLを処理
+            for idx, row in df.iterrows():
+                for url_col in url_columns:
+                    url = str(row[url_col]).strip()
+                    if url and url != 'nan' and ('http' in url or '.' in url):
+                        try:
+                            # HTMLコンテンツを取得
+                            html_content = self.fetch_html_body(url)
+
+                            if "エラー" not in html_content:
+                                # タイトル列があれば使用、なければURLから生成
+                                title_cols = [col for col in df.columns if any(keyword in col.lower() for keyword in ['title', 'タイトル', '題名', '名前'])]
+                                if title_cols:
+                                    title = str(row[title_cols[0]])
+                                else:
+                                    title = f"Webページ: {urlparse(url).netloc}"
+
+                                # RAGに追加
+                                filename = f"{title}_{idx}.html"
+                                success = self.rag_manager.add_document(
+                                    product_name, filename, html_content.encode('utf-8')
+                                )
+
+                                if success:
+                                    results["processed_urls"] += 1
+                                else:
+                                    results["failed_urls"] += 1
+                                    results["error_details"].append(f"RAG追加失敗: {url}")
+                            else:
+                                results["failed_urls"] += 1
+                                results["error_details"].append(f"{url}: {html_content}")
+
+                        except Exception as e:
+                            results["failed_urls"] += 1
+                            results["error_details"].append(f"{url}: {str(e)}")
+
+            return results
+
+        except Exception as e:
+            return {"success": False, "error": f"CSV処理エラー: {str(e)}"}
+
+    def create_url_template_csv(self) -> bytes:
+        """URL取得用のテンプレートCSVを作成"""
+        template_data = {
+            "タイトル": [
+                "会社概要ページ",
+                "製品紹介ページ",
+                "料金プランページ",
+                "サポートページ",
+                "よくある質問",
+            ],
+            "URL": [
+                "https://example.com/about",
+                "https://example.com/products",
+                "https://example.com/pricing",
+                "https://example.com/support",
+                "https://example.com/faq",
+            ],
+            "説明": [
+                "会社の基本情報",
+                "製品の詳細機能",
+                "価格体系と料金プラン",
+                "サポート体制",
+                "よくある質問と回答",
+            ],
+        }
+
+        df = pd.DataFrame(template_data)
+
+        # CSVとしてメモリ上に作成
+        csv_buffer = io.StringIO()
+        df.to_csv(csv_buffer, index=False, encoding="utf-8-sig")
+        return csv_buffer.getvalue().encode("utf-8-sig")
 
     def create_template_csv(self) -> bytes:
         """Q&A形式のテンプレートCSVを作成"""
@@ -64,7 +207,7 @@ class FileHandler:
         st.subheader(f"📁 {product_name} 用ファイルアップロード")
 
         # テンプレートCSVダウンロードボタンを追加
-        col1, col2 = st.columns([3, 1])
+        col1, col2, col3 = st.columns([2, 1, 1])
 
         with col1:
             st.write("**サポートファイル形式**: TXT, PDF, DOCX, PPTX, HTML, CSV")
@@ -72,11 +215,21 @@ class FileHandler:
         with col2:
             template_csv = self.create_template_csv()
             st.download_button(
-                label="📥 Q&Aテンプレート CSV",
+                label="📥 Q&Aテンプレート",
                 data=template_csv,
                 file_name=f"{product_name}_qa_template.csv",
                 mime="text/csv",
                 help="質問と回答の形式でCSVファイルを作成する際のテンプレートです",
+            )
+
+        with col3:
+            url_template_csv = self.create_url_template_csv()
+            st.download_button(
+                label="🌐 URLテンプレート",
+                data=url_template_csv,
+                file_name=f"{product_name}_url_template.csv",
+                mime="text/csv",
+                help="WebページのURLを記載してHTMLコンテンツを取得する際のテンプレートです",
             )
 
         st.markdown("---")
@@ -85,29 +238,44 @@ class FileHandler:
         with st.expander("📋 CSVファイルの使用方法", expanded=False):
             st.markdown(
                 """
-            **CSVファイルは質疑応答形式で処理されます:**
+            **CSVファイルには3つの処理方法があります:**
 
-            1. **1列目**: 質問内容（必須）
-            2. **2列目**: 回答内容（必須）
-            3. **3列目**: 参考文献・リンク（任意）
+            ## 1. Q&Aペア形式
+            質疑応答形式でデータを処理します：
+            - **1列目**: 質問内容（必須）
+            - **2列目**: 回答内容（必須）
+            - **3列目**: 参考文献・リンク（任意）
 
             **推奨カラム名:**
             ```
             質問,回答,参考文献
             ```
 
-            **使用例:**
+            ## 2. URL一括取得 🌐 NEW!
+            WebページのURLからHTMLコンテンツを自動取得します：
+            - **URL列**: WebページのURL（必須）
+            - **タイトル列**: ページのタイトル（推奨）
+            - **説明列**: ページの説明（任意）
+
+            **推奨カラム名:**
             ```
-            質問,回答,参考文献
-            "製品の価格は？","基本プラン月額10,000円から","https://example.com/pricing"
-            "サポート時間は？","平日9-18時、土日祝日は休業","https://example.com/support"
+            タイトル,URL,説明
             ```
 
+            **使用例:**
+            ```
+            タイトル,URL,説明
+            "会社概要","https://example.com/about","会社の基本情報"
+            "製品情報","https://example.com/products","製品の詳細機能"
+            ```
+
+            ## 3. 通常のテキスト形式
+            CSV全体を1つの文書として処理します。
+
             **注意事項:**
-            - カラム名は「質問」「回答」「参考文献」を推奨（位置での判定も可能）
-            - 質問と回答は具体的に記載してください
-            - 参考文献列は省略可能です
-            - 空白行は自動的にスキップされます
+            - URL一括取得では、各URLのHTMLのbodyタグ内容を自動的に抽出します
+            - HTTPSとHTTP両方に対応しています
+            - ページ取得に失敗したURLはスキップされます
             - 上記テンプレートをダウンロードして参考にしてください
             """
             )
@@ -133,9 +301,9 @@ class FileHandler:
                         if file_type == "csv":
                             csv_process_type = st.selectbox(
                                 "CSV処理方法:",
-                                ["Q&Aペア形式", "通常のテキスト形式"],
+                                ["Q&Aペア形式", "URL一括取得", "通常のテキスト形式"],
                                 key=f"csv_type_{uploaded_file.name}_{product_name}",
-                                help="Q&Aペア形式: 各行を質問-回答ペアとして個別処理\n通常のテキスト形式: CSV全体を1つの文書として処理",
+                                help="Q&Aペア形式: 各行を質問-回答ペアとして個別処理\nURL一括取得: CSVのURLからHTMLコンテンツを取得\n通常のテキスト形式: CSV全体を1つの文書として処理",
                             )
 
                         if st.button(f"追加", key=f"add_{uploaded_file.name}_{product_name}"):
@@ -145,16 +313,35 @@ class FileHandler:
                                     success = self.rag_manager.add_csv_as_qa_pairs(
                                         product_name, uploaded_file.name, uploaded_file.read()
                                     )
+                                # CSVファイルでURL一括取得が選択された場合
+                                elif file_type == "csv" and csv_process_type == "URL一括取得":
+                                    csv_content = uploaded_file.read()
+                                    result = self.process_url_csv(product_name, csv_content)
+
+                                    if result["success"]:
+                                        st.success(f"✅ URL処理完了: {result['processed_urls']}件のURLからHTMLを取得しました")
+                                        if result["failed_urls"] > 0:
+                                            st.warning(f"⚠️ {result['failed_urls']}件のURLで取得に失敗しました")
+                                            if result["error_details"]:
+                                                with st.expander("エラー詳細", expanded=False):
+                                                    for error in result["error_details"][:5]:  # 最大5件まで表示
+                                                        st.write(f"• {error}")
+                                        # ファイル追加時の自動バックアップ
+                                        feedback_manager._trigger_auto_backup("URL content addition backup")
+                                        success = True
+                                    else:
+                                        st.error(f"❌ URL処理エラー: {result['error']}")
+                                        success = False
                                 else:
                                     success = self.rag_manager.add_document(
                                         product_name, uploaded_file.name, uploaded_file.read(), file_type
                                     )
 
-                                if success:
+                                if success and csv_process_type != "URL一括取得":
                                     st.success(f"✅ {uploaded_file.name} が追加されました")
                                     # ファイル追加時の自動バックアップ
                                     feedback_manager._trigger_auto_backup("File addition backup")
-                                else:
+                                elif not success and csv_process_type != "URL一括取得":
                                     st.error(f"❌ {uploaded_file.name} の追加に失敗しました")
                 else:
                     st.warning(f"⚠️ {uploaded_file.name} はサポートされていないファイル形式です")
